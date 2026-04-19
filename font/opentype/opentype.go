@@ -362,12 +362,12 @@ func emboldenSegments(src sfnt.Segments, embolden fixed.Int26_6) sfnt.Segments {
 					}
 					l := math.Min(lIn, lOut) // min adjacent edge length
 					// d is 1 + dot(in, out); same branch conditions as FreeType.
-					if xStrength*q <= l*d || q == 0 {
+					if q == 0 || xStrength*q <= l*d {
 						shift.x = shift.x * xStrength / d
 					} else {
 						shift.x = shift.x * l / q
 					}
-					if yStrength*q <= l*d || q == 0 {
+					if q == 0 || yStrength*q <= l*d {
 						shift.y = shift.y * yStrength / d
 					} else {
 						shift.y = shift.y * l / q
