@@ -66,6 +66,9 @@ func ParseReaderAt(src io.ReaderAt) (*Font, error) {
 // call concurrently.
 type Font = sfnt.Font
 
+// maxEmbolden caps synthetic embolden at 8px (in 26.6 format). This keeps
+// mask growth bounded so rendering cost and temporary allocations remain
+// predictable.
 const maxEmbolden = 8 << 6
 
 // FaceOptions describes the possible options given to NewFace when
@@ -311,8 +314,9 @@ func (f *Face) emboldenMask() {
 		}
 		head, tail := 0, 0
 		for x := 0; x < w; x++ {
-			minX := x - f.emboldenPx
-			for head < tail && idx[head] < minX {
+			// Keep indices in the inclusive [x-emboldenPx, x] window.
+			lowerInclusive := x - f.emboldenPx
+			for head < tail && idx[head] < lowerInclusive {
 				head++
 			}
 			alpha := row[x]
