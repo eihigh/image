@@ -10,6 +10,7 @@ run:
 This command regenerates:
 	- font/testdata/freetype-embolden-A..Z-12px.png
 	- font/testdata/freetype-regular-vs-embolden-text-12px.png
+	- font/testdata/freetype-regular-vs-embolden-text-24px.png
 	- testdata/font-embolden-demo.png
 	- testdata/font-embolden-mixed-demo.png
 

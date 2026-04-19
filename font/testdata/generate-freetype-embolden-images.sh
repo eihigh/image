@@ -7,6 +7,7 @@ OUT_DIR="$SCRIPT_DIR"
 DEMO_PATH="$REPO_ROOT/testdata/font-embolden-demo.png"
 MIXED_DEMO_PATH="$REPO_ROOT/testdata/font-embolden-mixed-demo.png"
 FREETYPE_TEXT_EXPECTED_PATH="$OUT_DIR/freetype-regular-vs-embolden-text-12px.png"
+FREETYPE_TEXT_LARGE_EXPECTED_PATH="$OUT_DIR/freetype-regular-vs-embolden-text-24px.png"
 
 if ! command -v pkg-config >/dev/null 2>&1 || ! pkg-config --exists freetype2; then
   echo "error: freetype2 development files are required (pkg-config freetype2)" >&2
@@ -182,6 +183,90 @@ int main(int argc, char **argv) {
     free(img);
   }
 
+  FT_Set_Pixel_Sizes(face, 0, 24);
+  {
+    const int W = 2300;
+    const int H = 440;
+    const int left_x = 60;
+    const int right_x = 1180;
+    const int line_y[] = {100, 190, 280, 370};
+    const char *lines[] = {
+      "Sphinx of black quartz, judge my vow while vectors and rasters align.",
+      "Pack my box with five dozen liquor jugs; embolden makes stems visibly thicker.",
+      "Quick wafting zephyrs vex bold Jim as regular and embolden are compared.",
+      "How razorback-jumping frogs can level six piqued gymnasts! 1234567890",
+    };
+    const int n_lines = (int)(sizeof(lines) / sizeof(lines[0]));
+    unsigned char *img = (unsigned char *)calloc(W * H, 1);
+    if (!img) return 1;
+
+    for (int i = 0; i < n_lines; i++) {
+      const char *s = lines[i];
+
+      {
+        int pen_x = left_x;
+        int baseline = line_y[i];
+        for (const char *p = s; *p; p++) {
+          unsigned char ch = (unsigned char)*p;
+          if (FT_Load_Char(face, ch, FT_LOAD_NO_HINTING)) continue;
+          if (FT_Render_Glyph(face->glyph, FT_RENDER_MODE_NORMAL)) continue;
+          FT_GlyphSlot g = face->glyph;
+          int x0 = pen_x + g->bitmap_left;
+          int y0 = baseline - g->bitmap_top;
+          for (int y = 0; y < g->bitmap.rows; y++) {
+            int yy = y0 + y;
+            if (yy < 0 || yy >= H) continue;
+            for (int x = 0; x < g->bitmap.width; x++) {
+              int xx = x0 + x;
+              if (xx < 0 || xx >= W) continue;
+              unsigned char v = g->bitmap.buffer[y * g->bitmap.pitch + x];
+              unsigned char *dst = &img[yy * W + xx];
+              if (v > *dst) *dst = v;
+            }
+          }
+          pen_x += g->advance.x >> 6;
+        }
+      }
+
+      {
+        int pen_x = right_x;
+        int baseline = line_y[i];
+        for (const char *p = s; *p; p++) {
+          unsigned char ch = (unsigned char)*p;
+          if (FT_Load_Char(face, ch, FT_LOAD_NO_HINTING)) continue;
+          FT_Outline_EmboldenXY(&face->glyph->outline, 64, 64);
+          if (FT_Render_Glyph(face->glyph, FT_RENDER_MODE_NORMAL)) continue;
+          FT_GlyphSlot g = face->glyph;
+          int x0 = pen_x + g->bitmap_left;
+          int y0 = baseline - g->bitmap_top;
+          for (int y = 0; y < g->bitmap.rows; y++) {
+            int yy = y0 + y;
+            if (yy < 0 || yy >= H) continue;
+            for (int x = 0; x < g->bitmap.width; x++) {
+              int xx = x0 + x;
+              if (xx < 0 || xx >= W) continue;
+              unsigned char v = g->bitmap.buffer[y * g->bitmap.pitch + x];
+              unsigned char *dst = &img[yy * W + xx];
+              if (v > *dst) *dst = v;
+            }
+          }
+          pen_x += g->advance.x >> 6;
+        }
+      }
+    }
+
+    {
+      char outpath[1024];
+      snprintf(outpath, sizeof(outpath), "%s/freetype-regular-vs-embolden-text-24px.pgm", outdir);
+      FILE *fp = fopen(outpath, "wb");
+      if (!fp) return 1;
+      fprintf(fp, "P5\n%d %d\n255\n", W, H);
+      fwrite(img, 1, W * H, fp);
+      fclose(fp);
+    }
+    free(img);
+  }
+
   FT_Done_Face(face);
   FT_Done_FreeType(lib);
   return 0;
@@ -331,14 +416,15 @@ return writePNG(path, dst)
 }
 
 func main() {
-if len(os.Args) != 6 {
-panic("usage: convert_and_generate_demo <tmp-dir> <font-testdata-out-dir> <demo-png-path> <mixed-demo-png-path> <freetype-text-expected-path>")
+if len(os.Args) != 7 {
+panic("usage: convert_and_generate_demo <tmp-dir> <font-testdata-out-dir> <demo-png-path> <mixed-demo-png-path> <freetype-text-expected-path> <freetype-text-large-expected-path>")
 }
 tmpDir := os.Args[1]
 outDir := os.Args[2]
 demoPath := os.Args[3]
 mixedDemoPath := os.Args[4]
 freetypeTextExpectedPath := os.Args[5]
+freetypeTextLargeExpectedPath := os.Args[6]
 
 for ch := 'A'; ch <= 'Z'; ch++ {
 pgmPath := filepath.Join(tmpDir, fmt.Sprintf("freetype-embolden-%c-12px.pgm", ch))
@@ -366,12 +452,21 @@ panic(err)
 if err := writePNG(freetypeTextExpectedPath, textImg); err != nil {
 panic(err)
 }
+largeTextPGMPath := filepath.Join(tmpDir, "freetype-regular-vs-embolden-text-24px.pgm")
+largeTextImg, err := decodePGM(largeTextPGMPath)
+if err != nil {
+panic(err)
+}
+if err := writePNG(freetypeTextLargeExpectedPath, largeTextImg); err != nil {
+panic(err)
+}
 }
 EOGO
 
-( cd "$REPO_ROOT" && go run "$TMP_DIR/convert_and_generate_demo.go" "$TMP_DIR" "$OUT_DIR" "$DEMO_PATH" "$MIXED_DEMO_PATH" "$FREETYPE_TEXT_EXPECTED_PATH" )
+( cd "$REPO_ROOT" && go run "$TMP_DIR/convert_and_generate_demo.go" "$TMP_DIR" "$OUT_DIR" "$DEMO_PATH" "$MIXED_DEMO_PATH" "$FREETYPE_TEXT_EXPECTED_PATH" "$FREETYPE_TEXT_LARGE_EXPECTED_PATH" )
 
 echo "Generated: $OUT_DIR/freetype-embolden-{A..Z}-12px.png"
 echo "Generated: $DEMO_PATH"
 echo "Generated: $MIXED_DEMO_PATH"
 echo "Generated: $FREETYPE_TEXT_EXPECTED_PATH"
+echo "Generated: $FREETYPE_TEXT_LARGE_EXPECTED_PATH"
