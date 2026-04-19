@@ -6,6 +6,7 @@ REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 OUT_DIR="$SCRIPT_DIR"
 DEMO_PATH="$REPO_ROOT/testdata/font-embolden-demo.png"
 MIXED_DEMO_PATH="$REPO_ROOT/testdata/font-embolden-mixed-demo.png"
+FREETYPE_MIXED_DEMO_PATH="$REPO_ROOT/testdata/font-embolden-mixed-demo-freetype.png"
 FREETYPE_TEXT_EXPECTED_PATH="$OUT_DIR/freetype-regular-vs-embolden-text-12px.png"
 FREETYPE_TEXT_LARGE_EXPECTED_PATH="$OUT_DIR/freetype-regular-vs-embolden-text-24px.png"
 
@@ -313,6 +314,57 @@ int main(int argc, char **argv) {
     }
   }
 
+  FT_Set_Pixel_Sizes(face, 0, 48);
+  {
+    const int W = 1700;
+    const int H = 580;
+    const int left_x = 40;
+    const int embolden_levels[] = {0, 32, 64, 128, 192};
+    const int n_levels = (int)(sizeof(embolden_levels) / sizeof(embolden_levels[0]));
+    const char *line = "Sphinx of black quartz, judge my vow. 1234567890";
+    unsigned char *img = (unsigned char *)calloc(W * H, 1);
+    if (!img) return 1;
+
+    for (int i = 0; i < n_levels; i++) {
+      int baseline = 96 + i * 96;
+      int pen_x = left_x;
+      for (const char *p = line; *p; p++) {
+        unsigned char ch = (unsigned char)*p;
+        if (FT_Load_Char(face, ch, FT_LOAD_NO_HINTING)) continue;
+        if (embolden_levels[i] > 0) {
+          FT_Outline_EmboldenXY(&face->glyph->outline, embolden_levels[i], embolden_levels[i]);
+        }
+        if (FT_Render_Glyph(face->glyph, FT_RENDER_MODE_NORMAL)) continue;
+        FT_GlyphSlot g = face->glyph;
+        int x0 = pen_x + g->bitmap_left;
+        int y0 = baseline - g->bitmap_top;
+        for (int y = 0; y < g->bitmap.rows; y++) {
+          int yy = y0 + y;
+          if (yy < 0 || yy >= H) continue;
+          for (int x = 0; x < g->bitmap.width; x++) {
+            int xx = x0 + x;
+            if (xx < 0 || xx >= W) continue;
+            unsigned char v = g->bitmap.buffer[y * g->bitmap.pitch + x];
+            unsigned char *dst = &img[yy * W + xx];
+            if (v > *dst) *dst = v;
+          }
+        }
+        pen_x += g->advance.x >> 6;
+      }
+    }
+
+    {
+      char outpath[1024];
+      snprintf(outpath, sizeof(outpath), "%s/freetype-mixed-demo.pgm", outdir);
+      FILE *fp = fopen(outpath, "wb");
+      if (!fp) return 1;
+      fprintf(fp, "P5\n%d %d\n255\n", W, H);
+      fwrite(img, 1, W * H, fp);
+      fclose(fp);
+    }
+    free(img);
+  }
+
   FT_Done_Face(face);
   FT_Done_FreeType(lib);
   return 0;
@@ -479,15 +531,16 @@ return writePNG(path, dst)
 }
 
 func main() {
-if len(os.Args) != 7 {
- panic("usage: convert_and_generate_demo <tmp-dir> <font-testdata-out-dir> <demo-png-path> <mixed-demo-png-path> <freetype-text-expected-path> <freetype-text-large-expected-path>")
+if len(os.Args) != 8 {
+ panic("usage: convert_and_generate_demo <tmp-dir> <font-testdata-out-dir> <demo-png-path> <mixed-demo-png-path> <freetype-mixed-demo-png-path> <freetype-text-expected-path> <freetype-text-large-expected-path>")
 }
 tmpDir := os.Args[1]
 outDir := os.Args[2]
 demoPath := os.Args[3]
 mixedDemoPath := os.Args[4]
-freetypeTextExpectedPath := os.Args[5]
-freetypeTextLargeExpectedPath := os.Args[6]
+freetypeMixedDemoPath := os.Args[5]
+freetypeTextExpectedPath := os.Args[6]
+freetypeTextLargeExpectedPath := os.Args[7]
 
 for ch := 'A'; ch <= 'Z'; ch++ {
 pgmPath := filepath.Join(tmpDir, fmt.Sprintf("freetype-embolden-%c-12px.pgm", ch))
@@ -527,6 +580,14 @@ panic(err)
 if err := generateMixedDemo(mixedDemoPath); err != nil {
 panic(err)
 }
+freetypeMixedPGMPath := filepath.Join(tmpDir, "freetype-mixed-demo.pgm")
+freetypeMixedImg, err := decodePGM(freetypeMixedPGMPath)
+if err != nil {
+panic(err)
+}
+if err := writePNG(freetypeMixedDemoPath, freetypeMixedImg); err != nil {
+panic(err)
+}
 textPGMPath := filepath.Join(tmpDir, "freetype-regular-vs-embolden-text-12px.pgm")
 textImg, err := decodePGM(textPGMPath)
 if err != nil {
@@ -546,11 +607,12 @@ panic(err)
 }
 EOGO
 
-( cd "$REPO_ROOT" && go run "$TMP_DIR/convert_and_generate_demo.go" "$TMP_DIR" "$OUT_DIR" "$DEMO_PATH" "$MIXED_DEMO_PATH" "$FREETYPE_TEXT_EXPECTED_PATH" "$FREETYPE_TEXT_LARGE_EXPECTED_PATH" )
+( cd "$REPO_ROOT" && go run "$TMP_DIR/convert_and_generate_demo.go" "$TMP_DIR" "$OUT_DIR" "$DEMO_PATH" "$MIXED_DEMO_PATH" "$FREETYPE_MIXED_DEMO_PATH" "$FREETYPE_TEXT_EXPECTED_PATH" "$FREETYPE_TEXT_LARGE_EXPECTED_PATH" )
 
 echo "Generated: $OUT_DIR/freetype-embolden-{A..Z}-12px.png"
 echo "Generated: $OUT_DIR/freetype-embolden-120px-{A,M,W,Q}-w{128,256,384,512}.png"
 echo "Generated: $DEMO_PATH"
 echo "Generated: $MIXED_DEMO_PATH"
+echo "Generated: $FREETYPE_MIXED_DEMO_PATH"
 echo "Generated: $FREETYPE_TEXT_EXPECTED_PATH"
 echo "Generated: $FREETYPE_TEXT_LARGE_EXPECTED_PATH"
