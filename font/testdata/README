@@ -1,2 +1,31 @@
 CFFTest.sfd is a FontForge file for creating CFFTest.otf, a custom OpenType
 font for testing the golang.org/x/image/font/sfnt package's CFF support.
+
+To regenerate FreeType embolden expected images used by
+font/opentype/TestFaceGlyphEmboldenFreeTypeExpected and the embolden demo image,
+run:
+
+	./font/testdata/generate-freetype-embolden-images.sh
+
+This command regenerates:
+	- font/testdata/freetype-embolden-A..Z-12px.png
+	- font/testdata/freetype-embolden-120px-A-w128.png
+	- font/testdata/freetype-embolden-120px-M-w256.png
+	- font/testdata/freetype-embolden-120px-W-w384.png
+	- font/testdata/freetype-embolden-120px-Q-w512.png
+	- font/testdata/freetype-regular-vs-embolden-text-12px.png
+	- font/testdata/freetype-regular-vs-embolden-text-24px.png
+	- testdata/font-embolden-demo.png
+	- testdata/font-embolden-mixed-demo.png
+	- testdata/font-embolden-mixed-demo-freetype.png
+
+Generator conditions (for reproducibility):
+	- Input font: golang.org/x/image/font/gofont/goregular.TTF
+	- FreeType render settings: FT_LOAD_NO_HINTING, FT_RENDER_MODE_NORMAL
+	- FreeType embolden settings: FT_Outline_EmboldenXY(..., 64, 64)
+	- Expected images are generated from FreeType's outline push-out embolden path
+	  processing (not bitmap spreading).
+	- Pixel size: 12
+	- Test comparison placement baseline: Dot=(20, 55)
+	- Additional large-glyph fixtures: size=120 with embolden widths {128,256,384,512} at Dot=(40, 220)
+	- Mixed demo (FreeType): size=48, embolden widths {0,32,64,128,192}, text="Sphinx of black quartz, judge my vow. 1234567890"
