@@ -152,43 +152,47 @@ func TestFaceGlyphEmboldenFreeTypeExpected(t *testing.T) {
 	}
 	defer face.Close()
 
-	got := image.NewAlpha(image.Rect(0, 0, 80, 80))
-	d := font.Drawer{
-		Dst:  got,
-		Src:  image.NewUniform(color.Alpha{A: 255}),
-		Face: face,
-		Dot:  fixed.P(20, 55),
-	}
-	d.DrawString("A")
-
-	path := filepath.FromSlash("../testdata/freetype-embolden-A-12px.png")
-	fp, err := os.Open(path)
-	if err != nil {
-		t.Fatalf("Open expected image: %v", err)
-	}
-	defer fp.Close()
-	wantImg, err := png.Decode(fp)
-	if err != nil {
-		t.Fatalf("Decode expected image: %v", err)
-	}
-	if got.Bounds() != wantImg.Bounds() {
-		t.Fatalf("image bounds mismatch: got %v, want %v", got.Bounds(), wantImg.Bounds())
-	}
-
+	// RGBA() returns 16-bit channel values (0..65535), so 8-bit 128 maps to 128*257.
 	const threshold = uint32(128 * 257)
-	const maxMismatchedPixels = 40
-	mismatched := 0
-	for y := got.Bounds().Min.Y; y < got.Bounds().Max.Y; y++ {
-		for x := got.Bounds().Min.X; x < got.Bounds().Max.X; x++ {
-			gr, _, _, _ := got.At(x, y).RGBA()
-			wr, _, _, _ := wantImg.At(x, y).RGBA()
-			if (gr >= threshold) != (wr >= threshold) {
-				mismatched++
+	// Allow small rasterizer differences while keeping comparison strict.
+	const maxMismatchedPixels = 50
+	for ch := 'A'; ch <= 'Z'; ch++ {
+		got := image.NewAlpha(image.Rect(0, 0, 80, 80))
+		d := font.Drawer{
+			Dst:  got,
+			Src:  image.NewUniform(color.Alpha{A: 255}),
+			Face: face,
+			Dot:  fixed.P(20, 55),
+		}
+		d.DrawString(string(ch))
+
+		path := filepath.FromSlash("../testdata/freetype-embolden-" + string(ch) + "-12px.png")
+		fp, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("%c: Open expected image %q: %v", ch, path, err)
+		}
+		wantImg, err := png.Decode(fp)
+		fp.Close()
+		if err != nil {
+			t.Fatalf("%c: Decode expected image: %v", ch, err)
+		}
+		if got.Bounds() != wantImg.Bounds() {
+			t.Fatalf("%c: image bounds mismatch: got %v, want %v", ch, got.Bounds(), wantImg.Bounds())
+		}
+
+		mismatched := 0
+		for y := got.Bounds().Min.Y; y < got.Bounds().Max.Y; y++ {
+			for x := got.Bounds().Min.X; x < got.Bounds().Max.X; x++ {
+				gr, _, _, _ := got.At(x, y).RGBA()
+				wr, _, _, _ := wantImg.At(x, y).RGBA()
+				if (gr >= threshold) != (wr >= threshold) {
+					mismatched++
+				}
 			}
 		}
-	}
-	if mismatched > maxMismatchedPixels {
-		t.Fatalf("embolden mask differs from FreeType expected: mismatched=%d, max=%d", mismatched, maxMismatchedPixels)
+		if mismatched > maxMismatchedPixels {
+			t.Fatalf("%c: embolden mask differs from FreeType expected: mismatched=%d, max=%d", ch, mismatched, maxMismatchedPixels)
+		}
 	}
 }
 
