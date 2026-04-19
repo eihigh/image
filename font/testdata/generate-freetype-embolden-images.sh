@@ -495,6 +495,12 @@ img, err := decodePGM(pgmPath)
 if err != nil {
 panic(err)
 }
+pngPath := filepath.Join(outDir, fmt.Sprintf("freetype-embolden-%c-12px.png", ch))
+if err := writePNG(pngPath, img); err != nil {
+panic(err)
+}
+}
+
 for _, tc := range []struct{
 ch rune
 embolden int
@@ -510,11 +516,6 @@ if err != nil {
 panic(err)
 }
 pngPath := filepath.Join(outDir, fmt.Sprintf("freetype-embolden-120px-%c-w%d.png", tc.ch, tc.embolden))
-if err := writePNG(pngPath, img); err != nil {
-panic(err)
-}
-}
-pngPath := filepath.Join(outDir, fmt.Sprintf("freetype-embolden-%c-12px.png", ch))
 if err := writePNG(pngPath, img); err != nil {
 panic(err)
 }
