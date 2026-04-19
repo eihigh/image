@@ -45,6 +45,7 @@ import (
 	"errors"
 	"image"
 	"io"
+	"math"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/math/fixed"
@@ -1411,6 +1412,12 @@ func (f *Font) viewGlyphData(b *Buffer, x GlyphIndex) (buf []byte, offset, lengt
 
 // LoadGlyphOptions are the options to the Font.LoadGlyph method.
 type LoadGlyphOptions struct {
+	// Embolden is the glyph embolden strength in 26.6 pixel units.
+	//
+	// It is applied after glyph vectors are loaded and scaled to ppem (and after
+	// converting to Y-down coordinates). A zero value preserves existing
+	// behavior.
+	Embolden fixed.Int26_6
 	// TODO: transform / hinting.
 }
 
@@ -1463,6 +1470,10 @@ func (f *Font) LoadGlyph(b *Buffer, x GlyphIndex, ppem fixed.Int26_6, opts *Load
 			a[j].X = +scale(a[j].X*ppem, f.cached.unitsPerEm)
 			a[j].Y = -scale(a[j].Y*ppem, f.cached.unitsPerEm)
 		}
+	}
+
+	if opts != nil && opts.Embolden != 0 {
+		emboldenSegments(b.segments, opts.Embolden)
 	}
 
 	// TODO: look at opts to transform / hint the Buffer.segments.
@@ -1981,6 +1992,163 @@ func (s Segments) Bounds() (bounds fixed.Rectangle26_6) {
 	}
 
 	return bounds
+}
+
+func segmentNumArgs(op SegmentOp) int {
+	switch op {
+	case SegmentOpMoveTo, SegmentOpLineTo:
+		return 1
+	case SegmentOpQuadTo:
+		return 2
+	case SegmentOpCubeTo:
+		return 3
+	}
+	return 0
+}
+
+type segmentPointRef struct {
+	segIdx int
+	argIdx int
+}
+
+type contourInfo struct {
+	pointRefs []segmentPointRef
+	anchors   []fixed.Point26_6
+}
+
+func emboldenSegments(segments Segments, strength fixed.Int26_6) {
+	contours := collectContours(segments)
+	for _, c := range contours {
+		if len(c.pointRefs) < 2 {
+			continue
+		}
+		outwardSign := contourOutwardSign(c.anchors)
+		if outwardSign == 0 {
+			continue
+		}
+		emboldenContour(segments, c.pointRefs, strength, outwardSign)
+	}
+}
+
+func collectContours(segments Segments) []contourInfo {
+	contours := make([]contourInfo, 0, 8)
+	cur := contourInfo{}
+	appendCurrent := func() {
+		if len(cur.pointRefs) != 0 {
+			contours = append(contours, cur)
+		}
+		cur = contourInfo{}
+	}
+
+	for i := range segments {
+		seg := &segments[i]
+		n := segmentNumArgs(seg.Op)
+		if n == 0 {
+			continue
+		}
+		if seg.Op == SegmentOpMoveTo {
+			appendCurrent()
+			cur.pointRefs = append(cur.pointRefs, segmentPointRef{segIdx: i, argIdx: 0})
+			cur.anchors = append(cur.anchors, seg.Args[0])
+			continue
+		}
+		for j := 0; j < n; j++ {
+			cur.pointRefs = append(cur.pointRefs, segmentPointRef{segIdx: i, argIdx: j})
+		}
+		cur.anchors = append(cur.anchors, seg.Args[n-1])
+	}
+	appendCurrent()
+	return contours
+}
+
+func contourOutwardSign(anchors []fixed.Point26_6) float64 {
+	if len(anchors) < 3 {
+		return 0
+	}
+	area2 := float64(0)
+	for i := range anchors {
+		p := anchors[i]
+		q := anchors[(i+1)%len(anchors)]
+		area2 += float64(p.X)*float64(q.Y) - float64(q.X)*float64(p.Y)
+	}
+	if area2 > 0 {
+		// Y-down coordinates: clockwise contours have positive area and outward
+		// points to the right of the edge direction.
+		return +1
+	}
+	if area2 < 0 {
+		return -1
+	}
+	return 0
+}
+
+func emboldenContour(segments Segments, refs []segmentPointRef, strength fixed.Int26_6, outwardSign float64) {
+	for i := range refs {
+		ref := refs[i]
+		p := segments[ref.segIdx].Args[ref.argIdx]
+
+		prev, okPrev := contourNeighborPoint(segments, refs, i, -1)
+		next, okNext := contourNeighborPoint(segments, refs, i, +1)
+		if !okPrev || !okNext {
+			continue
+		}
+
+		n0x, n0y, ok0 := outwardNormal(prev, p, outwardSign)
+		n1x, n1y, ok1 := outwardNormal(p, next, outwardSign)
+		if !ok0 && !ok1 {
+			continue
+		}
+
+		nx, ny := n0x+n1x, n0y+n1y
+		if !ok0 {
+			nx, ny = n1x, n1y
+		} else if !ok1 {
+			nx, ny = n0x, n0y
+		} else if d := math.Hypot(nx, ny); d > 0 {
+			nx /= d
+			ny /= d
+		} else {
+			nx, ny = n0x, n0y
+		}
+
+		dx := fixed.Int26_6(math.Round(float64(strength) * nx))
+		dy := fixed.Int26_6(math.Round(float64(strength) * ny))
+		segments[ref.segIdx].Args[ref.argIdx].X = p.X + dx
+		segments[ref.segIdx].Args[ref.argIdx].Y = p.Y + dy
+	}
+}
+
+func contourNeighborPoint(segments Segments, refs []segmentPointRef, i, step int) (fixed.Point26_6, bool) {
+	if len(refs) == 0 {
+		return fixed.Point26_6{}, false
+	}
+	p := segments[refs[i].segIdx].Args[refs[i].argIdx]
+	n := len(refs)
+	j := i
+	for k := 0; k < n-1; k++ {
+		j = (j + step + n) % n
+		q := segments[refs[j].segIdx].Args[refs[j].argIdx]
+		if q != p {
+			return q, true
+		}
+	}
+	return fixed.Point26_6{}, false
+}
+
+func outwardNormal(a, b fixed.Point26_6, outwardSign float64) (x, y float64, ok bool) {
+	dx := float64(b.X - a.X)
+	dy := float64(b.Y - a.Y)
+	d := math.Hypot(dx, dy)
+	if d == 0 {
+		return 0, 0, false
+	}
+	dx /= d
+	dy /= d
+	if outwardSign > 0 {
+		// Right normal for clockwise contours in Y-down coordinates.
+		return +dy, -dx, true
+	}
+	return -dy, +dx, true
 }
 
 // translateArgs applies a translation to args.

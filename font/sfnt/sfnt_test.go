@@ -869,6 +869,66 @@ func TestPPEM(t *testing.T) {
 	}
 }
 
+func TestLoadGlyphEmbolden(t *testing.T) {
+	f, err := Parse(goregular.TTF)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	ppem := fixed.Int26_6(f.UnitsPerEm())
+	var b Buffer
+
+	x, err := f.GlyphIndex(&b, 'A')
+	if err != nil {
+		t.Fatalf("GlyphIndex: %v", err)
+	}
+	if x == 0 {
+		t.Fatalf("GlyphIndex: no glyph index found for 'A'")
+	}
+
+	regular, err := f.LoadGlyph(&b, x, ppem, nil)
+	if err != nil {
+		t.Fatalf("LoadGlyph regular: %v", err)
+	}
+	want := append(Segments(nil), regular...)
+
+	same, err := f.LoadGlyph(&b, x, ppem, &LoadGlyphOptions{})
+	if err != nil {
+		t.Fatalf("LoadGlyph same: %v", err)
+	}
+	if len(same) != len(want) {
+		t.Fatalf("LoadGlyph with zero embolden changed segment count: got %d, want %d", len(same), len(want))
+	}
+	for i := range same {
+		if same[i] != want[i] {
+			t.Fatalf("LoadGlyph with zero embolden changed segment at %d: got %v, want %v", i, same[i], want[i])
+		}
+	}
+
+	emboldened, err := f.LoadGlyph(&b, x, ppem, &LoadGlyphOptions{Embolden: 64})
+	if err != nil {
+		t.Fatalf("LoadGlyph emboldened: %v", err)
+	}
+
+	if len(emboldened) != len(want) {
+		t.Fatalf("segment count changed: got %d, want %d", len(emboldened), len(want))
+	}
+	for i := range emboldened {
+		if emboldened[i].Op != want[i].Op {
+			t.Fatalf("segment op changed at %d: got %v, want %v", i, emboldened[i].Op, want[i].Op)
+		}
+	}
+
+	regularBounds := want.Bounds()
+	embBounds := emboldened.Bounds()
+	if embBounds.Min.X > regularBounds.Min.X || embBounds.Min.Y > regularBounds.Min.Y ||
+		embBounds.Max.X < regularBounds.Max.X || embBounds.Max.Y < regularBounds.Max.Y {
+		t.Fatalf("emboldened bounds do not cover regular bounds: got %v, regular %v", embBounds, regularBounds)
+	}
+	if embBounds == regularBounds {
+		t.Fatalf("emboldened bounds unchanged: %v", embBounds)
+	}
+}
+
 func TestPostInfo(t *testing.T) {
 	data, err := ioutil.ReadFile(filepath.FromSlash("../testdata/glyfTest.ttf"))
 	if err != nil {

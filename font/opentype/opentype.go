@@ -72,6 +72,11 @@ type FaceOptions struct {
 	Size    float64      // Size is the font size in points
 	DPI     float64      // DPI is the dots per inch resolution
 	Hinting font.Hinting // Hinting selects how to quantize a vector font's glyph nodes
+	// Embolden is the glyph embolden strength in 26.6 pixel units.
+	//
+	// It is applied to glyph outlines after loading/scaling and before
+	// rasterization. A zero value preserves existing behavior.
+	Embolden fixed.Int26_6
 }
 
 func defaultFaceOptions() *FaceOptions {
@@ -86,9 +91,10 @@ func defaultFaceOptions() *FaceOptions {
 //
 // A Face is not safe to use concurrently.
 type Face struct {
-	f       *Font
-	hinting font.Hinting
-	scale   fixed.Int26_6
+	f        *Font
+	hinting  font.Hinting
+	scale    fixed.Int26_6
+	embolden fixed.Int26_6
 
 	metrics    font.Metrics
 	metricsSet bool
@@ -106,9 +112,10 @@ func NewFace(f *Font, opts *FaceOptions) (font.Face, error) {
 		opts = defaultFaceOptions()
 	}
 	face := &Face{
-		f:       f,
-		hinting: opts.Hinting,
-		scale:   fixed.Int26_6(0.5 + (opts.Size * opts.DPI * 64 / 72)),
+		f:        f,
+		hinting:  opts.Hinting,
+		scale:    fixed.Int26_6(0.5 + (opts.Size * opts.DPI * 64 / 72)),
+		embolden: opts.Embolden,
 	}
 	return face, nil
 }
@@ -158,7 +165,9 @@ func (f *Face) Glyph(dot fixed.Point26_6, r rune) (dr image.Rectangle, mask imag
 		return image.Rectangle{}, nil, image.Point{}, 0, false
 	}
 
-	segments, err := f.f.LoadGlyph(&f.buf, x, f.scale, nil)
+	segments, err := f.f.LoadGlyph(&f.buf, x, f.scale, &sfnt.LoadGlyphOptions{
+		Embolden: f.embolden,
+	})
 	if err != nil {
 		return image.Rectangle{}, nil, image.Point{}, 0, false
 	}

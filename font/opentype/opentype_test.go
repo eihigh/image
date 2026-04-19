@@ -15,7 +15,8 @@ import (
 )
 
 var (
-	regular font.Face
+	regular     font.Face
+	regularBold font.Face
 )
 
 func init() {
@@ -25,6 +26,13 @@ func init() {
 	}
 
 	regular, err = NewFace(font, defaultFaceOptions())
+	if err != nil {
+		panic(err)
+	}
+
+	boldOpts := defaultFaceOptions()
+	boldOpts.Embolden = 64
+	regularBold, err = NewFace(font, boldOpts)
 	if err != nil {
 		panic(err)
 	}
@@ -106,6 +114,24 @@ func TestFaceGlyph(t *testing.T) {
 			t.Errorf("%q: glyph advance width=%d. want=%d", test.r, advance, test.advance)
 			continue
 		}
+	}
+}
+
+func TestFaceGlyphEmbolden(t *testing.T) {
+	dot := fixed.P(200, 500)
+	dr0, _, _, adv0, ok0 := regular.Glyph(dot, 'A')
+	dr1, _, _, adv1, ok1 := regularBold.Glyph(dot, 'A')
+	if !ok0 || !ok1 {
+		t.Fatalf("could not load glyphs: regular=%v bold=%v", ok0, ok1)
+	}
+	if adv1 != adv0 {
+		t.Fatalf("embolden changed advance: got %d, want %d", adv1, adv0)
+	}
+	if dr1.Min.X > dr0.Min.X || dr1.Min.Y > dr0.Min.Y || dr1.Max.X < dr0.Max.X || dr1.Max.Y < dr0.Max.Y {
+		t.Fatalf("emboldened draw rect does not cover regular draw rect: got %v, regular %v", dr1, dr0)
+	}
+	if dr1 == dr0 {
+		t.Fatalf("emboldened draw rect unchanged: %v", dr1)
 	}
 }
 
