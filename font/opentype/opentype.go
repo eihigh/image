@@ -261,6 +261,31 @@ func (f *Face) Glyph(dot fixed.Point26_6, r rune) (dr image.Rectangle, mask imag
 	return dr, &f.mask, f.mask.Rect.Min, advance, x != 0
 }
 
+// emboldenSegments follows FreeType's FT_Outline_EmboldenXY at a high level,
+// but it is not a literal port.
+//
+// Mismatches vs FreeType are intentional and should be kept in mind for
+// follow-up work:
+//   - This code walks sfnt.Segments-derived point references, not FT_Outline's
+//     native {points, tags, contours} arrays, so the processed point stream is
+//     only an approximation of FreeType's point model.
+//   - Numeric behavior differs: this uses float64 + math.Hypot + math.Round,
+//     while FreeType uses fixed/integer-style FT_Pos/FT_Fixed arithmetic
+//     (FT_MulDiv, FT_Vector_Length), so edge-case rounding can diverge.
+//   - The contour walk is not FreeType's strict one-point-at-a-time loop.
+//     It skips zero-length outgoing edges and can apply one computed shift to
+//     a run of points (`for ; i != j; ...`). Ordinary contours are usually
+//     close, but degenerate contours (duplicate points / zero-length edges) may
+//     diverge.
+//   - There are extra early exits (for example minX == maxX || minY == maxY)
+//     that are not present in FT_Outline_EmboldenXY.
+//   - Time complexity remains O(n), but memory behavior differs because this
+//     implementation allocates pointRefs/contourEnds/points instead of mutating
+//     FreeType's outline arrays in-place.
+//
+// To move closer to a true FreeType port, operate on an FT_Outline-like
+// representation, use a strict one-point contour walk, remove or explicitly
+// justify extra early exits, and revisit the numeric model/rounding behavior.
 func emboldenSegments(src sfnt.Segments, embolden fixed.Int26_6) sfnt.Segments {
 	if embolden <= 0 || len(src) == 0 {
 		return src
