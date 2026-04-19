@@ -6,6 +6,10 @@ package opentype
 
 import (
 	"image"
+	"image/color"
+	"image/png"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"golang.org/x/image/font"
@@ -15,7 +19,8 @@ import (
 )
 
 var (
-	regular font.Face
+	regular     font.Face
+	regularBold font.Face
 )
 
 func init() {
@@ -25,6 +30,13 @@ func init() {
 	}
 
 	regular, err = NewFace(font, defaultFaceOptions())
+	if err != nil {
+		panic(err)
+	}
+
+	boldOpts := defaultFaceOptions()
+	boldOpts.Embolden = 64
+	regularBold, err = NewFace(font, boldOpts)
 	if err != nil {
 		panic(err)
 	}
@@ -106,6 +118,142 @@ func TestFaceGlyph(t *testing.T) {
 			t.Errorf("%q: glyph advance width=%d. want=%d", test.r, advance, test.advance)
 			continue
 		}
+	}
+}
+
+func TestFaceGlyphEmbolden(t *testing.T) {
+	dot := fixed.P(200, 500)
+	dr0, _, _, adv0, ok0 := regular.Glyph(dot, 'A')
+	dr1, _, _, adv1, ok1 := regularBold.Glyph(dot, 'A')
+	if !ok0 || !ok1 {
+		t.Fatalf("could not load glyphs: regular=%v bold=%v", ok0, ok1)
+	}
+	if adv1 != adv0 {
+		t.Fatalf("embolden changed advance: got %d, want %d", adv1, adv0)
+	}
+	if dr1 == dr0 {
+		t.Fatalf("emboldened draw rect unchanged: %v", dr1)
+	}
+}
+
+func TestFaceGlyphEmboldenFreeTypeExpected(t *testing.T) {
+	f, err := sfnt.Parse(goregular.TTF)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	face, err := NewFace(f, &FaceOptions{
+		Size:     12,
+		DPI:      72,
+		Hinting:  font.HintingNone,
+		Embolden: 64,
+	})
+	if err != nil {
+		t.Fatalf("NewFace: %v", err)
+	}
+	defer face.Close()
+
+	// RGBA() returns 16-bit channel values (0..65535), so 8-bit 128 maps to 128*257.
+	const threshold = uint32(128 * 257)
+	// Allow small rasterizer differences while keeping comparison strict.
+	const maxMismatchedPixels = 80
+	for ch := 'A'; ch <= 'Z'; ch++ {
+		got := image.NewAlpha(image.Rect(0, 0, 80, 80))
+		d := font.Drawer{
+			Dst:  got,
+			Src:  image.NewUniform(color.Alpha{A: 255}),
+			Face: face,
+			Dot:  fixed.P(20, 55),
+		}
+		d.DrawString(string(ch))
+
+		path := filepath.FromSlash("../testdata/freetype-embolden-" + string(ch) + "-12px.png")
+		fp, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("%c: Open expected image %q: %v", ch, path, err)
+		}
+		wantImg, err := png.Decode(fp)
+		fp.Close()
+		if err != nil {
+			t.Fatalf("%c: Decode expected image: %v", ch, err)
+		}
+		if got.Bounds() != wantImg.Bounds() {
+			t.Fatalf("%c: image bounds mismatch: got %v, want %v", ch, got.Bounds(), wantImg.Bounds())
+		}
+
+		mismatched := 0
+		for y := got.Bounds().Min.Y; y < got.Bounds().Max.Y; y++ {
+			for x := got.Bounds().Min.X; x < got.Bounds().Max.X; x++ {
+				gr, _, _, _ := got.At(x, y).RGBA()
+				wr, _, _, _ := wantImg.At(x, y).RGBA()
+				if (gr >= threshold) != (wr >= threshold) {
+					mismatched++
+				}
+			}
+		}
+		if mismatched > maxMismatchedPixels {
+			t.Fatalf("%c: embolden mask differs from FreeType expected: mismatched=%d, max=%d", ch, mismatched, maxMismatchedPixels)
+		}
+	}
+}
+
+func TestFaceGlyphEmboldenFreeTypeTextExpected12px(t *testing.T) {
+	parsed, err := sfnt.Parse(goregular.TTF)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	regular, err := NewFace(parsed, &FaceOptions{Size: 12, DPI: 72, Hinting: font.HintingNone})
+	if err != nil {
+		t.Fatalf("NewFace regular: %v", err)
+	}
+	defer regular.Close()
+	bold, err := NewFace(parsed, &FaceOptions{Size: 12, DPI: 72, Hinting: font.HintingNone, Embolden: 64})
+	if err != nil {
+		t.Fatalf("NewFace bold: %v", err)
+	}
+	defer bold.Close()
+
+	got := image.NewAlpha(image.Rect(0, 0, 1100, 220))
+	lines := []string{
+		"Sphinx of black quartz, judge my vow while vectors and rasters align.",
+		"Pack my box with five dozen liquor jugs; embolden makes stems visibly thicker.",
+		"Quick wafting zephyrs vex bold Jim as regular and embolden are compared.",
+		"How razorback-jumping frogs can level six piqued gymnasts! 1234567890",
+	}
+	lineY := []int{50, 95, 140, 185}
+	for i, s := range lines {
+		rd := font.Drawer{Dst: got, Src: image.NewUniform(color.Alpha{A: 255}), Face: regular, Dot: fixed.P(30, lineY[i])}
+		rd.DrawString(s)
+		bd := font.Drawer{Dst: got, Src: image.NewUniform(color.Alpha{A: 255}), Face: bold, Dot: fixed.P(570, lineY[i])}
+		bd.DrawString(s)
+	}
+
+	fp, err := os.Open(filepath.FromSlash("../testdata/freetype-regular-vs-embolden-text-12px.png"))
+	if err != nil {
+		t.Fatalf("Open expected image: %v", err)
+	}
+	wantImg, err := png.Decode(fp)
+	fp.Close()
+	if err != nil {
+		t.Fatalf("Decode expected image: %v", err)
+	}
+	if got.Bounds() != wantImg.Bounds() {
+		t.Fatalf("image bounds mismatch: got %v, want %v", got.Bounds(), wantImg.Bounds())
+	}
+
+	const threshold = uint32(128 * 257)
+	const maxMismatchedPixels = 13000
+	mismatched := 0
+	for y := got.Bounds().Min.Y; y < got.Bounds().Max.Y; y++ {
+		for x := got.Bounds().Min.X; x < got.Bounds().Max.X; x++ {
+			gr, _, _, _ := got.At(x, y).RGBA()
+			wr, _, _, _ := wantImg.At(x, y).RGBA()
+			if (gr >= threshold) != (wr >= threshold) {
+				mismatched++
+			}
+		}
+	}
+	if mismatched > maxMismatchedPixels {
+		t.Fatalf("regular-vs-embolden text differs from FreeType expected: mismatched=%d, max=%d", mismatched, maxMismatchedPixels)
 	}
 }
 
