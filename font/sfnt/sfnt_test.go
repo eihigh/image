@@ -120,6 +120,13 @@ func checkSegmentsEqual(got, want []Segment) error {
 	return checkClosed(len(got))
 }
 
+func rect26_6Contains(outer, inner fixed.Rectangle26_6) bool {
+	return outer.Min.X <= inner.Min.X &&
+		outer.Min.Y <= inner.Min.Y &&
+		outer.Max.X >= inner.Max.X &&
+		outer.Max.Y >= inner.Max.Y
+}
+
 func TestTrueTypeParse(t *testing.T) {
 	f, err := Parse(goregular.TTF)
 	if err != nil {
@@ -920,8 +927,7 @@ func TestLoadGlyphEmbolden(t *testing.T) {
 
 	regularBounds := want.Bounds()
 	embBounds := emboldened.Bounds()
-	if embBounds.Min.X > regularBounds.Min.X || embBounds.Min.Y > regularBounds.Min.Y ||
-		embBounds.Max.X < regularBounds.Max.X || embBounds.Max.Y < regularBounds.Max.Y {
+	if !rect26_6Contains(embBounds, regularBounds) {
 		t.Fatalf("emboldened bounds do not cover regular bounds: got %v, regular %v", embBounds, regularBounds)
 	}
 	if embBounds == regularBounds {

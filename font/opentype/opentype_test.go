@@ -51,6 +51,13 @@ var runeTests = []struct {
 	{'x', 384, image.Rect(0, -7, 6, 0)},
 }
 
+func imageRectContains(outer, inner image.Rectangle) bool {
+	return outer.Min.X <= inner.Min.X &&
+		outer.Min.Y <= inner.Min.Y &&
+		outer.Max.X >= inner.Max.X &&
+		outer.Max.Y >= inner.Max.Y
+}
+
 func TestFaceGlyphAdvance(t *testing.T) {
 	for _, test := range runeTests {
 		got, ok := regular.GlyphAdvance(test.r)
@@ -127,7 +134,7 @@ func TestFaceGlyphEmbolden(t *testing.T) {
 	if adv1 != adv0 {
 		t.Fatalf("embolden changed advance: got %d, want %d", adv1, adv0)
 	}
-	if dr1.Min.X > dr0.Min.X || dr1.Min.Y > dr0.Min.Y || dr1.Max.X < dr0.Max.X || dr1.Max.Y < dr0.Max.Y {
+	if !imageRectContains(dr1, dr0) {
 		t.Fatalf("emboldened draw rect does not cover regular draw rect: got %v, regular %v", dr1, dr0)
 	}
 	if dr1 == dr0 {
