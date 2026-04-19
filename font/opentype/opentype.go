@@ -72,6 +72,7 @@ type FaceOptions struct {
 	Size    float64      // Size is the font size in points
 	DPI     float64      // DPI is the dots per inch resolution
 	Hinting font.Hinting // Hinting selects how to quantize a vector font's glyph nodes
+	Embolden fixed.Int26_6
 }
 
 func defaultFaceOptions() *FaceOptions {
@@ -89,6 +90,7 @@ type Face struct {
 	f       *Font
 	hinting font.Hinting
 	scale   fixed.Int26_6
+	embolden fixed.Int26_6
 
 	metrics    font.Metrics
 	metricsSet bool
@@ -109,6 +111,7 @@ func NewFace(f *Font, opts *FaceOptions) (font.Face, error) {
 		f:       f,
 		hinting: opts.Hinting,
 		scale:   fixed.Int26_6(0.5 + (opts.Size * opts.DPI * 64 / 72)),
+		embolden: opts.Embolden,
 	}
 	return face, nil
 }
@@ -161,6 +164,9 @@ func (f *Face) Glyph(dot fixed.Point26_6, r rune) (dr image.Rectangle, mask imag
 	segments, err := f.f.LoadGlyph(&f.buf, x, f.scale, nil)
 	if err != nil {
 		return image.Rectangle{}, nil, image.Point{}, 0, false
+	}
+	if f.embolden > 0 {
+		segments = emboldenSegments(segments, f.embolden)
 	}
 
 	// Numerical notation used below:
@@ -252,6 +258,33 @@ func (f *Face) Glyph(dot fixed.Point26_6, r rune) (dr image.Rectangle, mask imag
 	f.rast.Draw(&f.mask, f.mask.Bounds(), image.Opaque, image.Point{})
 
 	return dr, &f.mask, f.mask.Rect.Min, advance, x != 0
+}
+
+func emboldenSegments(src sfnt.Segments, embolden fixed.Int26_6) sfnt.Segments {
+	if embolden <= 0 {
+		return src
+	}
+	// FT_Outline_EmboldenXY with (64, 64) approximately corresponds to spreading
+	// the rasterized outline one pixel to the right and up at 12 px.
+	offsets := [...]fixed.Point26_6{
+		{},
+		{X: embolden},
+		{Y: -embolden},
+		{X: embolden, Y: -embolden},
+	}
+	dst := make(sfnt.Segments, 0, len(src)*len(offsets))
+	for _, off := range offsets {
+		for _, seg := range src {
+			seg.Args[0].X += off.X
+			seg.Args[0].Y += off.Y
+			seg.Args[1].X += off.X
+			seg.Args[1].Y += off.Y
+			seg.Args[2].X += off.X
+			seg.Args[2].Y += off.Y
+			dst = append(dst, seg)
+		}
+	}
+	return dst
 }
 
 // GlyphBounds satisfies the font.Face interface.
