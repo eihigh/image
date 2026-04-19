@@ -15,7 +15,9 @@ import (
 )
 
 var (
-	regular font.Face
+	regular   font.Face
+	emboldened font.Face
+	clamped    font.Face
 )
 
 func init() {
@@ -25,6 +27,18 @@ func init() {
 	}
 
 	regular, err = NewFace(font, defaultFaceOptions())
+	if err != nil {
+		panic(err)
+	}
+	emboldenOpts := defaultFaceOptions()
+	emboldenOpts.Embolden = fixed.I(1)
+	emboldened, err = NewFace(font, emboldenOpts)
+	if err != nil {
+		panic(err)
+	}
+	clampOpts := defaultFaceOptions()
+	clampOpts.Embolden = -fixed.I(1)
+	clamped, err = NewFace(font, clampOpts)
 	if err != nil {
 		panic(err)
 	}
@@ -157,4 +171,94 @@ func TestFaceMetrics(t *testing.T) {
 	if got != want {
 		t.Fatalf("metrics failed. got=%#v. want=%#v", got, want)
 	}
+}
+
+func TestFaceEmboldenGlyphConsistency(t *testing.T) {
+	fixedDot := fixed.P(200, 500)
+	dr0, mask0, _, advance0, ok := regular.Glyph(fixedDot, 'A')
+	if !ok {
+		t.Fatal("regular face: could not get glyph for 'A'")
+	}
+	dr1, mask1, _, advance1, ok := emboldened.Glyph(fixedDot, 'A')
+	if !ok {
+		t.Fatal("emboldened face: could not get glyph for 'A'")
+	}
+	if got, want := dr1.Min, dr0.Min; got != want {
+		t.Fatalf("glyph draw min=%v, want=%v", got, want)
+	}
+	if got, want := dr1.Max.Y, dr0.Max.Y; got != want {
+		t.Fatalf("glyph draw maxY=%d, want=%d", got, want)
+	}
+	if got, want := dr1.Max.X, dr0.Max.X+1; got != want {
+		t.Fatalf("glyph draw maxX=%d, want=%d", got, want)
+	}
+	if got, want := advance1, advance0+fixed.I(1); got != want {
+		t.Fatalf("glyph advance=%d, want=%d", got, want)
+	}
+	if got, want := countAlpha(mask1), countAlpha(mask0); got <= want {
+		t.Fatalf("glyph mask area=%d, want > %d", got, want)
+	}
+}
+
+func TestFaceEmboldenBoundsAndAdvance(t *testing.T) {
+	bounds0, advance0, ok := regular.GlyphBounds('x')
+	if !ok {
+		t.Fatal("regular face: could not get glyph bounds for 'x'")
+	}
+	bounds1, advance1, ok := emboldened.GlyphBounds('x')
+	if !ok {
+		t.Fatal("emboldened face: could not get glyph bounds for 'x'")
+	}
+	if got, want := bounds1.Min, bounds0.Min; got != want {
+		t.Fatalf("glyph bounds min=%v, want=%v", got, want)
+	}
+	if got, want := bounds1.Max.Y, bounds0.Max.Y; got != want {
+		t.Fatalf("glyph bounds maxY=%d, want=%d", got, want)
+	}
+	if got, want := bounds1.Max.X, bounds0.Max.X+fixed.I(1); got != want {
+		t.Fatalf("glyph bounds maxX=%d, want=%d", got, want)
+	}
+	if got, want := advance1, advance0+fixed.I(1); got != want {
+		t.Fatalf("glyph bounds advance=%d, want=%d", got, want)
+	}
+
+	a0, ok := regular.GlyphAdvance('x')
+	if !ok {
+		t.Fatal("regular face: could not get glyph advance for 'x'")
+	}
+	a1, ok := emboldened.GlyphAdvance('x')
+	if !ok {
+		t.Fatal("emboldened face: could not get glyph advance for 'x'")
+	}
+	if got, want := a1, a0+fixed.I(1); got != want {
+		t.Fatalf("glyph advance=%d, want=%d", got, want)
+	}
+}
+
+func TestFaceEmboldenNegativeClampedToZero(t *testing.T) {
+	got, ok := clamped.GlyphAdvance('A')
+	if !ok {
+		t.Fatal("clamped face: could not get glyph advance for 'A'")
+	}
+	want, ok := regular.GlyphAdvance('A')
+	if !ok {
+		t.Fatal("regular face: could not get glyph advance for 'A'")
+	}
+	if got != want {
+		t.Fatalf("negative embolden should clamp to zero: got=%d want=%d", got, want)
+	}
+}
+
+func countAlpha(mask image.Image) int {
+	a, ok := mask.(*image.Alpha)
+	if !ok {
+		return 0
+	}
+	n := 0
+	for _, p := range a.Pix {
+		if p != 0 {
+			n++
+		}
+	}
+	return n
 }

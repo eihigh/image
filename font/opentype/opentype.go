@@ -66,12 +66,20 @@ func ParseReaderAt(src io.ReaderAt) (*Font, error) {
 // call concurrently.
 type Font = sfnt.Font
 
+const maxEmbolden = 8 << 6
+
 // FaceOptions describes the possible options given to NewFace when
 // creating a new font.Face from a Font.
 type FaceOptions struct {
 	Size    float64      // Size is the font size in points
 	DPI     float64      // DPI is the dots per inch resolution
 	Hinting font.Hinting // Hinting selects how to quantize a vector font's glyph nodes
+	// Embolden is the synthetic bold strength in 26.6 pixels.
+	//
+	// It approximates FreeType's FT_GlyphSlot_Embolden behavior in pure Go by
+	// expanding glyph masks horizontally and increasing glyph advance and bounds.
+	// Negative values are treated as zero. Extremely large values are clamped.
+	Embolden fixed.Int26_6
 }
 
 func defaultFaceOptions() *FaceOptions {
@@ -86,16 +94,19 @@ func defaultFaceOptions() *FaceOptions {
 //
 // A Face is not safe to use concurrently.
 type Face struct {
-	f       *Font
-	hinting font.Hinting
-	scale   fixed.Int26_6
+	f          *Font
+	hinting    font.Hinting
+	scale      fixed.Int26_6
+	embolden   fixed.Int26_6
+	emboldenPx int
 
 	metrics    font.Metrics
 	metricsSet bool
 
-	buf  sfnt.Buffer
-	rast vector.Rasterizer
-	mask image.Alpha
+	buf         sfnt.Buffer
+	rast        vector.Rasterizer
+	mask        image.Alpha
+	emboldenRow []uint8
 }
 
 // NewFace returns a new font.Face for the given Font.
@@ -105,10 +116,19 @@ func NewFace(f *Font, opts *FaceOptions) (font.Face, error) {
 	if opts == nil {
 		opts = defaultFaceOptions()
 	}
+	embolden := opts.Embolden
+	if embolden < 0 {
+		embolden = 0
+	} else if embolden > maxEmbolden {
+		embolden = maxEmbolden
+	}
+	emboldenPx := int((embolden + 63) >> 6)
 	face := &Face{
-		f:       f,
-		hinting: opts.Hinting,
-		scale:   fixed.Int26_6(0.5 + (opts.Size * opts.DPI * 64 / 72)),
+		f:          f,
+		hinting:    opts.Hinting,
+		scale:      fixed.Int26_6(0.5 + (opts.Size * opts.DPI * 64 / 72)),
+		embolden:   embolden,
+		emboldenPx: emboldenPx,
 	}
 	return face, nil
 }
@@ -157,6 +177,7 @@ func (f *Face) Glyph(dot fixed.Point26_6, r rune) (dr image.Rectangle, mask imag
 	if err != nil {
 		return image.Rectangle{}, nil, image.Point{}, 0, false
 	}
+	advance += f.embolden
 
 	segments, err := f.f.LoadGlyph(&f.buf, x, f.scale, nil)
 	if err != nil {
@@ -175,6 +196,7 @@ func (f *Face) Glyph(dot fixed.Point26_6, r rune) (dr image.Rectangle, mask imag
 	// the dot). dst space is the coordinate space that contains both the dot
 	// (a sub-pixel position) and dr (an integer-pixel rectangle).
 	dBounds := segments.Bounds().Add(dot)
+	dBounds.Max.X += f.embolden
 
 	// Quantize the sub-pixel bounds (dBounds) to integer-pixel bounds (dr).
 	dr.Min.X = dBounds.Min.X.Floor()
@@ -250,14 +272,50 @@ func (f *Face) Glyph(dot fixed.Point26_6, r rune) (dr image.Rectangle, mask imag
 		}
 	}
 	f.rast.Draw(&f.mask, f.mask.Bounds(), image.Opaque, image.Point{})
+	if f.emboldenPx > 0 {
+		f.emboldenMask()
+	}
 
 	return dr, &f.mask, f.mask.Rect.Min, advance, x != 0
+}
+
+func (f *Face) emboldenMask() {
+	w, h := f.mask.Rect.Dx(), f.mask.Rect.Dy()
+	if w <= 0 || h <= 0 {
+		return
+	}
+	if cap(f.emboldenRow) < w {
+		f.emboldenRow = make([]uint8, 2*w)
+	}
+	row := f.emboldenRow[:w]
+	for y := 0; y < h; y++ {
+		pix := f.mask.Pix[y*f.mask.Stride : y*f.mask.Stride+w]
+		copy(row, pix)
+		for x, alpha := range row {
+			if alpha == 0 {
+				continue
+			}
+			end := x + f.emboldenPx
+			if end >= w {
+				end = w - 1
+			}
+			for i := x + 1; i <= end; i++ {
+				if pix[i] < alpha {
+					pix[i] = alpha
+				}
+			}
+		}
+	}
 }
 
 // GlyphBounds satisfies the font.Face interface.
 func (f *Face) GlyphBounds(r rune) (bounds fixed.Rectangle26_6, advance fixed.Int26_6, ok bool) {
 	x, _ := f.f.GlyphIndex(&f.buf, r)
 	bounds, advance, err := f.f.GlyphBounds(&f.buf, x, f.scale, f.hinting)
+	if err == nil {
+		bounds.Max.X += f.embolden
+		advance += f.embolden
+	}
 	return bounds, advance, (err == nil) && (x != 0)
 }
 
@@ -265,5 +323,8 @@ func (f *Face) GlyphBounds(r rune) (bounds fixed.Rectangle26_6, advance fixed.In
 func (f *Face) GlyphAdvance(r rune) (advance fixed.Int26_6, ok bool) {
 	x, _ := f.f.GlyphIndex(&f.buf, r)
 	advance, err := f.f.GlyphAdvance(&f.buf, x, f.scale, f.hinting)
+	if err == nil {
+		advance += f.embolden
+	}
 	return advance, (err == nil) && (x != 0)
 }

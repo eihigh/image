@@ -30,9 +30,10 @@ func ExampleNewFace() {
 		log.Fatalf("Parse: %v", err)
 	}
 	face, err := opentype.NewFace(f, &opentype.FaceOptions{
-		Size:    32,
-		DPI:     72,
-		Hinting: font.HintingNone,
+		Size:     32,
+		DPI:      72,
+		Hinting:  font.HintingNone,
+		Embolden: 0, // Set > 0 for synthetic bold.
 	})
 	if err != nil {
 		log.Fatalf("NewFace: %v", err)
