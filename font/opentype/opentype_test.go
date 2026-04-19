@@ -6,6 +6,10 @@ package opentype
 
 import (
 	"image"
+	"image/color"
+	"image/png"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"golang.org/x/image/font"
@@ -49,13 +53,6 @@ var runeTests = []struct {
 	{'Æ', 768, image.Rect(0, -9, 12, 0)},
 	{'i', 189, image.Rect(0, -9, 3, 0)},
 	{'x', 384, image.Rect(0, -7, 6, 0)},
-}
-
-func imageRectContains(outer, inner image.Rectangle) bool {
-	return outer.Min.X <= inner.Min.X &&
-		outer.Min.Y <= inner.Min.Y &&
-		outer.Max.X >= inner.Max.X &&
-		outer.Max.Y >= inner.Max.Y
 }
 
 func TestFaceGlyphAdvance(t *testing.T) {
@@ -134,11 +131,64 @@ func TestFaceGlyphEmbolden(t *testing.T) {
 	if adv1 != adv0 {
 		t.Fatalf("embolden changed advance: got %d, want %d", adv1, adv0)
 	}
-	if !imageRectContains(dr1, dr0) {
-		t.Fatalf("emboldened draw rect does not cover regular draw rect: got %v, regular %v", dr1, dr0)
-	}
 	if dr1 == dr0 {
 		t.Fatalf("emboldened draw rect unchanged: %v", dr1)
+	}
+}
+
+func TestFaceGlyphEmboldenFreeTypeExpected(t *testing.T) {
+	f, err := sfnt.Parse(goregular.TTF)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	face, err := NewFace(f, &FaceOptions{
+		Size:     12,
+		DPI:      72,
+		Hinting:  font.HintingNone,
+		Embolden: 64,
+	})
+	if err != nil {
+		t.Fatalf("NewFace: %v", err)
+	}
+	defer face.Close()
+
+	got := image.NewAlpha(image.Rect(0, 0, 80, 80))
+	d := font.Drawer{
+		Dst:  got,
+		Src:  image.NewUniform(color.Alpha{A: 255}),
+		Face: face,
+		Dot:  fixed.P(20, 55),
+	}
+	d.DrawString("A")
+
+	path := filepath.FromSlash("../testdata/freetype-embolden-A-12px.png")
+	fp, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open expected image: %v", err)
+	}
+	defer fp.Close()
+	wantImg, err := png.Decode(fp)
+	if err != nil {
+		t.Fatalf("Decode expected image: %v", err)
+	}
+	if got.Bounds() != wantImg.Bounds() {
+		t.Fatalf("image bounds mismatch: got %v, want %v", got.Bounds(), wantImg.Bounds())
+	}
+
+	const threshold = uint32(128 * 257)
+	const maxMismatchedPixels = 40
+	mismatched := 0
+	for y := got.Bounds().Min.Y; y < got.Bounds().Max.Y; y++ {
+		for x := got.Bounds().Min.X; x < got.Bounds().Max.X; x++ {
+			gr, _, _, _ := got.At(x, y).RGBA()
+			wr, _, _, _ := wantImg.At(x, y).RGBA()
+			if (gr >= threshold) != (wr >= threshold) {
+				mismatched++
+			}
+		}
+	}
+	if mismatched > maxMismatchedPixels {
+		t.Fatalf("embolden mask differs from FreeType expected: mismatched=%d, max=%d", mismatched, maxMismatchedPixels)
 	}
 }
 

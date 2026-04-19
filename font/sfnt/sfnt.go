@@ -2013,22 +2013,35 @@ type segmentPointRef struct {
 
 type contourInfo struct {
 	pointRefs []segmentPointRef
-	anchors   []fixed.Point26_6
 }
 
 const initialContourCapacity = 8
 
 func emboldenSegments(segments Segments, strength fixed.Int26_6) {
+	xStrength := strength / 2
+	yStrength := strength / 2
+	if xStrength == 0 && yStrength == 0 {
+		return
+	}
 	contours := collectContours(segments)
+	orientation := 0
+	maxAbsArea2 := 0.0
 	for _, c := range contours {
-		if len(c.pointRefs) < 2 {
-			continue
+		area2 := contourArea2(c.pointRefs, segments)
+		if aa := math.Abs(area2); aa > maxAbsArea2 {
+			maxAbsArea2 = aa
+			if area2 > 0 {
+				orientation = +1
+			} else if area2 < 0 {
+				orientation = -1
+			}
 		}
-		outwardSign := contourOutwardSign(c.anchors)
-		if outwardSign == 0 {
-			continue
-		}
-		emboldenContour(segments, c.pointRefs, strength, outwardSign)
+	}
+	if orientation == 0 {
+		return
+	}
+	for _, c := range contours {
+		emboldenContour(segments, c.pointRefs, xStrength, yStrength, orientation)
 	}
 }
 
@@ -2051,106 +2064,121 @@ func collectContours(segments Segments) []contourInfo {
 		if seg.Op == SegmentOpMoveTo {
 			appendCurrent()
 			cur.pointRefs = append(cur.pointRefs, segmentPointRef{segIdx: i, argIdx: 0})
-			cur.anchors = append(cur.anchors, seg.Args[0])
 			continue
 		}
 		for j := 0; j < n; j++ {
 			cur.pointRefs = append(cur.pointRefs, segmentPointRef{segIdx: i, argIdx: j})
 		}
-		cur.anchors = append(cur.anchors, seg.Args[n-1])
 	}
 	appendCurrent()
 	return contours
 }
 
-func contourOutwardSign(anchors []fixed.Point26_6) float64 {
-	if len(anchors) < 3 {
+func contourArea2(refs []segmentPointRef, segments Segments) float64 {
+	if len(refs) < 3 {
 		return 0
 	}
 	area2 := float64(0)
-	for i := range anchors {
-		p := anchors[i]
-		q := anchors[(i+1)%len(anchors)]
+	for i := range refs {
+		p := segments[refs[i].segIdx].Args[refs[i].argIdx]
+		q := segments[refs[(i+1)%len(refs)].segIdx].Args[refs[(i+1)%len(refs)].argIdx]
 		area2 += float64(p.X)*float64(q.Y) - float64(q.X)*float64(p.Y)
 	}
-	if area2 > 0 {
-		// Y-down coordinates: clockwise contours have positive area and outward
-		// points to the right of the edge direction.
-		return +1
-	}
-	if area2 < 0 {
-		return -1
-	}
-	return 0
+	return area2
 }
 
-func emboldenContour(segments Segments, refs []segmentPointRef, strength fixed.Int26_6, outwardSign float64) {
-	for i := range refs {
-		ref := refs[i]
-		p := segments[ref.segIdx].Args[ref.argIdx]
-
-		prev, okPrev := contourNeighborPoint(segments, refs, i, -1)
-		next, okNext := contourNeighborPoint(segments, refs, i, +1)
-		if !okPrev || !okNext {
-			continue
-		}
-
-		n0x, n0y, ok0 := outwardNormal(prev, p, outwardSign)
-		n1x, n1y, ok1 := outwardNormal(p, next, outwardSign)
-		if !ok0 && !ok1 {
-			continue
-		}
-
-		nx, ny := n0x+n1x, n0y+n1y
-		if !ok0 {
-			nx, ny = n1x, n1y
-		} else if !ok1 {
-			nx, ny = n0x, n0y
-		} else if d := math.Hypot(nx, ny); d > 0 {
-			nx /= d
-			ny /= d
-		} else {
-			nx, ny = n0x, n0y
-		}
-
-		dx := fixed.Int26_6(math.Round(float64(strength) * nx))
-		dy := fixed.Int26_6(math.Round(float64(strength) * ny))
-		segments[ref.segIdx].Args[ref.argIdx].X = p.X + dx
-		segments[ref.segIdx].Args[ref.argIdx].Y = p.Y + dy
-	}
-}
-
-func contourNeighborPoint(segments Segments, refs []segmentPointRef, i, step int) (fixed.Point26_6, bool) {
-	if len(refs) == 0 {
-		return fixed.Point26_6{}, false
-	}
-	p := segments[refs[i].segIdx].Args[refs[i].argIdx]
+func emboldenContour(segments Segments, refs []segmentPointRef, xStrength, yStrength fixed.Int26_6, orientation int) {
 	n := len(refs)
-	j := i
-	for k := 0; k < n-1; k++ {
-		j = (j + step + n) % n
-		q := segments[refs[j].segIdx].Args[refs[j].argIdx]
-		if q != p {
-			return q, true
-		}
+	if n < 2 {
+		return
 	}
-	return fixed.Point26_6{}, false
-}
 
-func outwardNormal(a, b fixed.Point26_6, outwardSign float64) (x, y float64, ok bool) {
-	dx := float64(b.X - a.X)
-	dy := float64(b.Y - a.Y)
-	d := math.Hypot(dx, dy)
-	if d == 0 {
-		return 0, 0, false
+	getPoint := func(idx int) fixed.Point26_6 {
+		ref := refs[idx]
+		return segments[ref.segIdx].Args[ref.argIdx]
 	}
-	dx /= d
-	dy /= d
-	if outwardSign > 0 {
-		// Right normal for clockwise contours in Y-down coordinates.
-		return +dy, -dx, true
+	addShift := func(idx int, dx, dy float64) {
+		ref := refs[idx]
+		p := segments[ref.segIdx].Args[ref.argIdx]
+		segments[ref.segIdx].Args[ref.argIdx].X = p.X + fixed.Int26_6(math.Round(dx))
+		segments[ref.segIdx].Args[ref.argIdx].Y = p.Y + fixed.Int26_6(math.Round(dy))
 	}
-	return -dy, +dx, true
+
+	var inX, inY, lIn float64
+	var anchorX, anchorY, lAnchor float64
+
+	i, j, k := n-1, 0, -1
+	for j != i && i != k {
+		var outX, outY, lOut float64
+		if j != k {
+			pi := getPoint(i)
+			pj := getPoint(j)
+			outX = float64(pj.X - pi.X)
+			outY = float64(pj.Y - pi.Y)
+			lOut = math.Hypot(outX, outY)
+			if lOut == 0 {
+				j = (j + 1) % n
+				continue
+			}
+			outX /= lOut
+			outY /= lOut
+		} else {
+			outX, outY, lOut = anchorX, anchorY, lAnchor
+		}
+
+		if lIn != 0 {
+			if k < 0 {
+				k = i
+				anchorX, anchorY, lAnchor = inX, inY, lIn
+			}
+
+			shiftX, shiftY := 0.0, 0.0
+			d := inX*outX + inY*outY
+			if d > -0.9375 { // FreeType threshold: -0xF000/0x10000 = -0.9375.
+				d += 1.0
+				shiftX = inY + outY
+				shiftY = inX + outX
+				if orientation > 0 {
+					shiftX = -shiftX
+				} else {
+					shiftY = -shiftY
+				}
+
+				q := outX*inY - outY*inX
+				if orientation > 0 {
+					q = -q
+				}
+				l := math.Min(lIn, lOut)
+
+				if d != 0 {
+					if float64(xStrength)*q <= l*d {
+						shiftX = shiftX * float64(xStrength) / d
+					} else if q != 0 {
+						shiftX = shiftX * l / q
+					} else {
+						shiftX = 0
+					}
+					if float64(yStrength)*q <= l*d {
+						shiftY = shiftY * float64(yStrength) / d
+					} else if q != 0 {
+						shiftY = shiftY * l / q
+					} else {
+						shiftY = 0
+					}
+				}
+			}
+
+			for i != j {
+				addShift(i, float64(xStrength)+shiftX, float64(yStrength)+shiftY)
+				i = (i + 1) % n
+			}
+		} else {
+			i = j
+		}
+
+		inX, inY, lIn = outX, outY, lOut
+		j = (j + 1) % n
+	}
 }
 
 // translateArgs applies a translation to args.
