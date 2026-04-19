@@ -302,13 +302,6 @@ func emboldenSegments(src sfnt.Segments, embolden fixed.Int26_6) sfnt.Segments {
 		return dst
 	}
 
-	next := func(index, first, last int) int {
-		if index < last {
-			return index + 1
-		}
-		return first
-	}
-
 	last := -1
 	for _, contourLast := range contourEnds {
 		first := last + 1
@@ -316,15 +309,15 @@ func emboldenSegments(src sfnt.Segments, embolden fixed.Int26_6) sfnt.Segments {
 
 		var in, out, anchor emboldenPoint
 		var lIn, lOut, lAnchor float64
-		// Match FT_Outline_EmboldenXY's i/j/k cycling: j walks contour points,
-		// i advances when points are moved, and k marks the anchor point.
+		// Match FT_Outline_EmboldenXY's i/j/k cycling:
+		// i is the point being moved, j is the walk cursor, k is the anchor.
 		for i, j, k := last, first, -1; j != i && i != k; {
 			if j != k {
 				out.x = points[j].x - points[i].x
 				out.y = points[j].y - points[i].y
 				lOut = math.Hypot(out.x, out.y)
 				if lOut == 0 {
-					j = next(j, first, last)
+					j = nextContourIndex(j, first, last)
 					continue
 				}
 				out.x /= lOut
@@ -343,9 +336,8 @@ func emboldenSegments(src sfnt.Segments, embolden fixed.Int26_6) sfnt.Segments {
 
 				d := in.x*out.x + in.y*out.y
 				shift := emboldenPoint{}
-				// -0xF000 in 16.16 fixed point from FreeType (~-0.9375): shift
-				// only when the corner turn is not close to 180 degrees.
-				if d > -0xF000/65536.0 {
+				// Shift only when the corner turn is not close to 180 degrees.
+				if d > emboldenCornerDotThreshold {
 					d += 1
 					shift.x = in.y + out.y
 					shift.y = in.x + out.x
@@ -374,7 +366,7 @@ func emboldenSegments(src sfnt.Segments, embolden fixed.Int26_6) sfnt.Segments {
 					}
 				}
 
-				for ; i != j; i = next(i, first, last) {
+				for ; i != j; i = nextContourIndex(i, first, last) {
 					points[i].x += xStrength + shift.x
 					points[i].y += yStrength + shift.y
 				}
@@ -384,7 +376,7 @@ func emboldenSegments(src sfnt.Segments, embolden fixed.Int26_6) sfnt.Segments {
 
 			in = out
 			lIn = lOut
-			j = next(j, first, last)
+			j = nextContourIndex(j, first, last)
 		}
 	}
 
@@ -404,6 +396,15 @@ type emboldenPointRef struct {
 type emboldenPoint struct {
 	x float64
 	y float64
+}
+
+const emboldenCornerDotThreshold = -0xF000 / 65536.0
+
+func nextContourIndex(index, first, last int) int {
+	if index < last {
+		return index + 1
+	}
+	return first
 }
 
 func emboldenPointRefs(segments sfnt.Segments) ([]emboldenPointRef, []int) {
@@ -452,7 +453,7 @@ const (
 
 func emboldenOutlineOrientation(points []emboldenPoint, contourEnds []int) emboldenOrientation {
 	if len(points) == 0 {
-		return emboldenOrientationTrueType
+		return emboldenOrientationNone
 	}
 
 	area := 0.0
