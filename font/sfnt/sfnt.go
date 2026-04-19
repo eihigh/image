@@ -2016,6 +2016,8 @@ type contourInfo struct {
 	anchors   []fixed.Point26_6
 }
 
+const initialContourCapacity = 8
+
 func emboldenSegments(segments Segments, strength fixed.Int26_6) {
 	contours := collectContours(segments)
 	for _, c := range contours {
@@ -2031,7 +2033,7 @@ func emboldenSegments(segments Segments, strength fixed.Int26_6) {
 }
 
 func collectContours(segments Segments) []contourInfo {
-	contours := make([]contourInfo, 0, 8)
+	contours := make([]contourInfo, 0, initialContourCapacity)
 	cur := contourInfo{}
 	appendCurrent := func() {
 		if len(cur.pointRefs) != 0 {
