@@ -425,37 +425,54 @@ parsed, err := sfnt.Parse(goregular.TTF)
 if err != nil {
 return err
 }
-regular, err := opentype.NewFace(parsed, &opentype.FaceOptions{Size: 64, DPI: 72, Hinting: font.HintingNone})
+emboldenLevels := []fixed.Int26_6{0, 32, 64, 128, 192}
+faces := make([]font.Face, 0, len(emboldenLevels))
+for _, embolden := range emboldenLevels {
+face, err := opentype.NewFace(parsed, &opentype.FaceOptions{
+Size: 48,
+DPI: 72,
+Hinting: font.HintingNone,
+Embolden: embolden,
+})
 if err != nil {
+for _, f := range faces {
+f.Close()
+}
 return err
 }
-defer regular.Close()
-bold, err := opentype.NewFace(parsed, &opentype.FaceOptions{Size: 64, DPI: 72, Hinting: font.HintingNone, Embolden: 64})
-if err != nil {
-return err
+faces = append(faces, face)
 }
-defer bold.Close()
+defer func() {
+for _, f := range faces {
+f.Close()
+}
+}()
 
-dst := image.NewRGBA(image.Rect(0, 0, 1200, 440))
+dst := image.NewRGBA(image.Rect(0, 0, 1700, 580))
 draw.Draw(dst, dst.Bounds(), image.NewUniform(color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}), image.Point{}, draw.Src)
 
-label := font.Drawer{Dst: dst, Src: image.NewUniform(color.RGBA{0x30, 0x30, 0x30, 0xFF}), Face: basicfont.Face7x13}
-label.Dot = fixed.P(40, 40)
-label.DrawString("Regular (HintingNone)")
-label.Dot = fixed.P(620, 40)
-label.DrawString("Embolden(64)")
+title := font.Drawer{Dst: dst, Src: image.NewUniform(color.RGBA{0x30, 0x30, 0x30, 0xFF}), Face: basicfont.Face7x13}
+title.Dot = fixed.P(40, 24)
+title.DrawString("Embolden parameter comparison (HintingNone, Size=48)")
+title.Dot = fixed.P(40, 42)
+title.DrawString("Same text rendered with multiple embolden widths for visual reference.")
 
-texts := []string{
-"AbCdEfGhIjKlMnOpQrStUvWxYz",
-"Go embolden: QuickBrownFox",
-"MixCase 123: VectorRaster",
+sampleText := "Sphinx of black quartz, judge my vow. 1234567890"
+for i, embolden := range emboldenLevels {
+baseline := 96 + i*96
+label := font.Drawer{Dst: dst, Src: image.NewUniform(color.RGBA{0x30, 0x30, 0x30, 0xFF}), Face: basicfont.Face7x13, Dot: fixed.P(40, baseline-36)}
+if embolden == 0 {
+label.DrawString("Embolden=0 (regular)")
+} else {
+label.DrawString(fmt.Sprintf("Embolden=%d", embolden))
 }
-for i, s := range texts {
-y := 130 + i*120
-rd := font.Drawer{Dst: dst, Src: image.NewUniform(color.RGBA{0x20, 0x20, 0x20, 0xFF}), Face: regular, Dot: fixed.P(40, y)}
-rd.DrawString(s)
-bd := font.Drawer{Dst: dst, Src: image.NewUniform(color.RGBA{0x20, 0x20, 0x20, 0xFF}), Face: bold, Dot: fixed.P(620, y)}
-bd.DrawString(s)
+text := font.Drawer{
+Dst:  dst,
+Src:  image.NewUniform(color.RGBA{0x20, 0x20, 0x20, 0xFF}),
+Face: faces[i],
+Dot:  fixed.P(40, baseline),
+}
+text.DrawString(sampleText)
 }
 
 return writePNG(path, dst)
