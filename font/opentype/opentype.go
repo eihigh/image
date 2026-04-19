@@ -285,7 +285,7 @@ func (f *Face) emboldenMask() {
 		return
 	}
 	if cap(f.emboldenRow) < w {
-		f.emboldenRow = make([]uint8, 2*w)
+		f.emboldenRow = make([]uint8, w)
 	}
 	row := f.emboldenRow[:w]
 	for y := 0; y < h; y++ {
@@ -295,11 +295,11 @@ func (f *Face) emboldenMask() {
 			if alpha == 0 {
 				continue
 			}
-			end := x + f.emboldenPx
-			if end >= w {
-				end = w - 1
+			end := x + f.emboldenPx + 1
+			if end > w {
+				end = w
 			}
-			for i := x + 1; i <= end; i++ {
+			for i := x + 1; i < end; i++ {
 				if pix[i] < alpha {
 					pix[i] = alpha
 				}
