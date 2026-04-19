@@ -137,6 +137,51 @@ func TestFaceGlyphEmbolden(t *testing.T) {
 	}
 }
 
+func TestFaceGlyphEmboldenMetricsUnchanged(t *testing.T) {
+	bold, ok := regularBold.(*Face)
+	if !ok {
+		t.Fatalf("unexpected face type %T", regularBold)
+	}
+	for _, r := range []rune{'A', 'Q', 'W'} {
+		advRegular, okRegular := regular.GlyphAdvance(r)
+		advBold, okBold := regularBold.GlyphAdvance(r)
+		if !okRegular || !okBold {
+			t.Fatalf("%q: GlyphAdvance unavailable: regular=%v bold=%v", r, okRegular, okBold)
+		}
+		if advBold != advRegular {
+			t.Fatalf("%q: GlyphAdvance changed by embolden: got %d, want %d", r, advBold, advRegular)
+		}
+
+		boundsRegular, boundsAdvRegular, okRegular := regular.GlyphBounds(r)
+		boundsBold, boundsAdvBold, okBold := regularBold.GlyphBounds(r)
+		if !okRegular || !okBold {
+			t.Fatalf("%q: GlyphBounds unavailable: regular=%v bold=%v", r, okRegular, okBold)
+		}
+		if boundsBold != boundsRegular {
+			t.Fatalf("%q: GlyphBounds changed by embolden: got %v, want %v", r, boundsBold, boundsRegular)
+		}
+		if boundsAdvBold != boundsAdvRegular {
+			t.Fatalf("%q: GlyphBounds advance changed by embolden: got %d, want %d", r, boundsAdvBold, boundsAdvRegular)
+		}
+
+		dot := fixed.P(200, 500)
+		drRegular, _, _, _, okRegular := regular.Glyph(dot, r)
+		drBold, _, _, _, okBold := regularBold.Glyph(dot, r)
+		if !okRegular || !okBold {
+			t.Fatalf("%q: Glyph unavailable: regular=%v bold=%v", r, okRegular, okBold)
+		}
+		if drBold == drRegular {
+			t.Fatalf("%q: embolden glyph draw rect unchanged: %v", r, drBold)
+		}
+	}
+
+	metricsRegular := regular.Metrics()
+	metricsBold := bold.Metrics()
+	if metricsBold != metricsRegular {
+		t.Fatalf("Metrics changed by embolden: got %+v, want %+v", metricsBold, metricsRegular)
+	}
+}
+
 func TestFaceGlyphEmboldenFreeTypeExpected(t *testing.T) {
 	f, err := sfnt.Parse(goregular.TTF)
 	if err != nil {
@@ -155,8 +200,8 @@ func TestFaceGlyphEmboldenFreeTypeExpected(t *testing.T) {
 
 	// RGBA() returns 16-bit channel values (0..65535), so 8-bit 128 maps to 128*257.
 	const threshold = uint32(128 * 257)
-	// Allow small rasterizer differences while keeping comparison strict.
-	const maxMismatchedPixels = 80
+	// Allow very small rasterizer differences while staying strict.
+	const maxMismatchedPixels = 12
 	for ch := 'A'; ch <= 'Z'; ch++ {
 		got := image.NewAlpha(image.Rect(0, 0, 80, 80))
 		d := font.Drawer{
@@ -270,10 +315,10 @@ func TestFaceGlyphEmboldenFreeTypeExpectedLarge120px(t *testing.T) {
 		embolden    fixed.Int26_6
 		maxMismatch int
 	}{
-		{'A', 128, 2000},
-		{'M', 256, 3000},
-		{'W', 384, 4000},
-		{'Q', 512, 5000},
+		{'A', 128, 64},
+		{'M', 256, 64},
+		{'W', 384, 96},
+		{'Q', 512, 96},
 	}
 	for _, tc := range testCases {
 		face, err := NewFace(parsed, &FaceOptions{
