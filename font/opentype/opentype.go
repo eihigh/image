@@ -107,6 +107,7 @@ type Face struct {
 	rast        vector.Rasterizer
 	mask        image.Alpha
 	emboldenRow []uint8
+	emboldenIdx []int
 }
 
 // NewFace returns a new font.Face for the given Font.
@@ -287,22 +288,35 @@ func (f *Face) emboldenMask() {
 	if cap(f.emboldenRow) < w {
 		f.emboldenRow = make([]uint8, w)
 	}
+	if cap(f.emboldenIdx) < w {
+		f.emboldenIdx = make([]int, w)
+	}
 	row := f.emboldenRow[:w]
+	idx := f.emboldenIdx[:w]
 	for y := 0; y < h; y++ {
 		pix := f.mask.Pix[y*f.mask.Stride : y*f.mask.Stride+w]
-		copy(row, pix)
-		for x, alpha := range row {
-			if alpha == 0 {
-				continue
+		hasInk := false
+		for i, alpha := range pix {
+			row[i] = alpha
+			hasInk = hasInk || alpha != 0
+		}
+		if !hasInk {
+			continue
+		}
+		head, tail := 0, 0
+		for x := 0; x < w; x++ {
+			minX := x - f.emboldenPx
+			for head < tail && idx[head] < minX {
+				head++
 			}
-			end := x + f.emboldenPx + 1
-			if end > w {
-				end = w
+			alpha := row[x]
+			for head < tail && row[idx[tail-1]] <= alpha {
+				tail--
 			}
-			for i := x + 1; i < end; i++ {
-				if pix[i] < alpha {
-					pix[i] = alpha
-				}
+			idx[tail] = x
+			tail++
+			if maxAlpha := row[idx[head]]; pix[x] < maxAlpha {
+				pix[x] = maxAlpha
 			}
 		}
 	}
