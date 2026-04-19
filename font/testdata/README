@@ -1,2 +1,22 @@
 CFFTest.sfd is a FontForge file for creating CFFTest.otf, a custom OpenType
 font for testing the golang.org/x/image/font/sfnt package's CFF support.
+
+To regenerate FreeType embolden expected images used by
+font/opentype/TestFaceGlyphEmboldenFreeTypeExpected and the embolden demo image,
+run:
+
+	./font/testdata/generate-freetype-embolden-images.sh
+
+This command regenerates:
+	- font/testdata/freetype-embolden-A..Z-12px.png
+	- font/testdata/freetype-regular-vs-embolden-text-12px.png
+	- font/testdata/freetype-regular-vs-embolden-text-24px.png
+	- testdata/font-embolden-demo.png
+	- testdata/font-embolden-mixed-demo.png
+
+Generator conditions (for reproducibility):
+	- Input font: golang.org/x/image/font/gofont/goregular.TTF
+	- FreeType render settings: FT_LOAD_NO_HINTING, FT_RENDER_MODE_NORMAL
+	- FreeType embolden settings: FT_Outline_EmboldenXY(..., 64, 64)
+	- Pixel size: 12
+	- Test comparison placement baseline: Dot=(20, 55)
