@@ -195,7 +195,7 @@ func TestFaceEmboldenGlyphConsistency(t *testing.T) {
 	if got, want := advance1, advance0+fixed.I(1); got != want {
 		t.Fatalf("glyph advance=%d, want=%d", got, want)
 	}
-	if got, want := countAlpha(mask1), countAlpha(mask0); got <= want {
+	if got, want := countNonZeroAlphaPixels(mask1), countNonZeroAlphaPixels(mask0); got <= want {
 		t.Fatalf("glyph mask area=%d, want > %d", got, want)
 	}
 }
@@ -249,7 +249,7 @@ func TestFaceEmboldenNegativeClampedToZero(t *testing.T) {
 	}
 }
 
-func countAlpha(mask image.Image) int {
+func countNonZeroAlphaPixels(mask image.Image) int {
 	a, ok := mask.(*image.Alpha)
 	if !ok {
 		return 0

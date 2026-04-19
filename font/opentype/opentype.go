@@ -280,6 +280,12 @@ func (f *Face) Glyph(dot fixed.Point26_6, r rune) (dr image.Rectangle, mask imag
 	return dr, &f.mask, f.mask.Rect.Min, advance, x != 0
 }
 
+// emboldenMask applies synthetic embolden in the X direction by replacing each
+// pixel's alpha with the maximum alpha in a [x-emboldenPx, x] window.
+//
+// This approximates FT_GlyphSlot_Embolden behavior with a pure Go mask-space
+// operation, and uses a deque-based sliding-window maximum so each row is
+// processed in O(width) time.
 func (f *Face) emboldenMask() {
 	w, h := f.mask.Rect.Dx(), f.mask.Rect.Dy()
 	if w <= 0 || h <= 0 {
