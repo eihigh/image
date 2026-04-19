@@ -198,6 +198,9 @@ func TestFaceEmboldenGlyphConsistency(t *testing.T) {
 	if got, want := countNonZeroAlphaPixels(mask1), countNonZeroAlphaPixels(mask0); got <= want {
 		t.Fatalf("glyph mask area=%d, want > %d", got, want)
 	}
+	if !hasNonZeroInLastColumn(mask1) {
+		t.Fatal("emboldened mask should add non-zero pixels on the right edge")
+	}
 }
 
 func TestFaceEmboldenBoundsAndAdvance(t *testing.T) {
@@ -261,4 +264,22 @@ func countNonZeroAlphaPixels(mask image.Image) int {
 		}
 	}
 	return n
+}
+
+func hasNonZeroInLastColumn(mask image.Image) bool {
+	a, ok := mask.(*image.Alpha)
+	if !ok {
+		return false
+	}
+	w, h := a.Rect.Dx(), a.Rect.Dy()
+	if w <= 0 || h <= 0 {
+		return false
+	}
+	x := w - 1
+	for y := 0; y < h; y++ {
+		if a.Pix[y*a.Stride+x] != 0 {
+			return true
+		}
+	}
+	return false
 }

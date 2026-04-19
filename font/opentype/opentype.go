@@ -316,6 +316,9 @@ func (f *Face) emboldenMask() {
 		for x := 0; x < w; x++ {
 			// Keep indices in the inclusive [x-emboldenPx, x] window.
 			windowStart := x - f.emboldenPx
+			if windowStart < 0 {
+				windowStart = 0
+			}
 			for head < tail && idx[head] < windowStart {
 				head++
 			}
