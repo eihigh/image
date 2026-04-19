@@ -273,13 +273,15 @@ func emboldenSegments(src sfnt.Segments, embolden fixed.Int26_6) sfnt.Segments {
 	}
 
 	points := make([]emboldenPoint, len(pointRefs))
-	minX, minY := math.Inf(1), math.Inf(1)
-	maxX, maxY := math.Inf(-1), math.Inf(-1)
 	for i, ref := range pointRefs {
 		p := dst[ref.segIndex].Args[ref.argIndex]
 		// FreeType's outline logic assumes Y grows upwards.
 		v := emboldenPoint{x: float64(p.X), y: -float64(p.Y)}
 		points[i] = v
+	}
+	minX, minY := points[0].x, points[0].y
+	maxX, maxY := minX, minY
+	for _, v := range points[1:] {
 		minX = math.Min(minX, v.x)
 		minY = math.Min(minY, v.y)
 		maxX = math.Max(maxX, v.x)
@@ -314,6 +316,8 @@ func emboldenSegments(src sfnt.Segments, embolden fixed.Int26_6) sfnt.Segments {
 
 		var in, out, anchor emboldenPoint
 		var lIn, lOut, lAnchor float64
+		// Match FT_Outline_EmboldenXY's i/j/k cycling: j walks contour points,
+		// i advances when points are moved, and k marks the anchor point.
 		for i, j, k := last, first, -1; j != i && i != k; {
 			if j != k {
 				out.x = points[j].x - points[i].x
@@ -339,6 +343,8 @@ func emboldenSegments(src sfnt.Segments, embolden fixed.Int26_6) sfnt.Segments {
 
 				d := in.x*out.x + in.y*out.y
 				shift := emboldenPoint{}
+				// -0xF000 in 16.16 fixed point from FreeType (~-0.9375): shift
+				// only when the corner turn is not close to 180 degrees.
 				if d > -0xF000/65536.0 {
 					d += 1
 					shift.x = in.y + out.y
@@ -350,12 +356,12 @@ func emboldenSegments(src sfnt.Segments, embolden fixed.Int26_6) sfnt.Segments {
 						shift.y = -shift.y
 					}
 
-					q := out.x*in.y - out.y*in.x
+					q := out.x*in.y - out.y*in.x // cross(out, in)
 					if orientation == emboldenOrientationTrueType {
 						q = -q
 					}
-
-					l := math.Min(lIn, lOut)
+					l := math.Min(lIn, lOut) // min adjacent edge length
+					// d is 1 + dot(in, out); same branch conditions as FreeType.
 					if xStrength*q <= l*d || q == 0 {
 						shift.x = shift.x * xStrength / d
 					} else {
