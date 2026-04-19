@@ -276,8 +276,7 @@ func emboldenSegments(src sfnt.Segments, embolden fixed.Int26_6) sfnt.Segments {
 	for i, ref := range pointRefs {
 		p := dst[ref.segIndex].Args[ref.argIndex]
 		// FreeType's outline logic assumes Y grows upwards.
-		v := emboldenPoint{x: float64(p.X), y: -float64(p.Y)}
-		points[i] = v
+		points[i] = emboldenPoint{x: float64(p.X), y: -float64(p.Y)}
 	}
 	minX, minY := points[0].x, points[0].y
 	maxX, maxY := minX, minY
