@@ -267,6 +267,52 @@ int main(int argc, char **argv) {
     free(img);
   }
 
+  FT_Set_Pixel_Sizes(face, 0, 120);
+  {
+    const int W = 280;
+    const int H = 280;
+    const int dot_x = 40;
+    const int dot_y = 220;
+    const char glyphs[] = {'A', 'M', 'W', 'Q'};
+    const int strengths[] = {128, 256, 384, 512};
+    const int n = (int)(sizeof(glyphs) / sizeof(glyphs[0]));
+    for (int i = 0; i < n; i++) {
+      unsigned char *img = (unsigned char *)calloc(W * H, 1);
+      if (!img) return 1;
+
+      if (!FT_Load_Char(face, (unsigned char)glyphs[i], FT_LOAD_NO_HINTING)) {
+        FT_Outline_EmboldenXY(&face->glyph->outline, strengths[i], strengths[i]);
+        if (!FT_Render_Glyph(face->glyph, FT_RENDER_MODE_NORMAL)) {
+          FT_GlyphSlot g = face->glyph;
+          int x0 = dot_x + g->bitmap_left;
+          int y0 = dot_y - g->bitmap_top;
+          for (int y = 0; y < g->bitmap.rows; y++) {
+            int yy = y0 + y;
+            if (yy < 0 || yy >= H) continue;
+            for (int x = 0; x < g->bitmap.width; x++) {
+              int xx = x0 + x;
+              if (xx < 0 || xx >= W) continue;
+              unsigned char v = g->bitmap.buffer[y * g->bitmap.pitch + x];
+              unsigned char *dst = &img[yy * W + xx];
+              if (v > *dst) *dst = v;
+            }
+          }
+        }
+      }
+
+      {
+        char outpath[1024];
+        snprintf(outpath, sizeof(outpath), "%s/freetype-embolden-120px-%c-w%d.pgm", outdir, glyphs[i], strengths[i]);
+        FILE *fp = fopen(outpath, "wb");
+        if (!fp) return 1;
+        fprintf(fp, "P5\n%d %d\n255\n", W, H);
+        fwrite(img, 1, W * H, fp);
+        fclose(fp);
+      }
+      free(img);
+    }
+  }
+
   FT_Done_Face(face);
   FT_Done_FreeType(lib);
   return 0;
@@ -417,7 +463,7 @@ return writePNG(path, dst)
 
 func main() {
 if len(os.Args) != 7 {
-panic("usage: convert_and_generate_demo <tmp-dir> <font-testdata-out-dir> <demo-png-path> <mixed-demo-png-path> <freetype-text-expected-path> <freetype-text-large-expected-path>")
+ panic("usage: convert_and_generate_demo <tmp-dir> <font-testdata-out-dir> <demo-png-path> <mixed-demo-png-path> <freetype-text-expected-path> <freetype-text-large-expected-path>")
 }
 tmpDir := os.Args[1]
 outDir := os.Args[2]
@@ -431,6 +477,25 @@ pgmPath := filepath.Join(tmpDir, fmt.Sprintf("freetype-embolden-%c-12px.pgm", ch
 img, err := decodePGM(pgmPath)
 if err != nil {
 panic(err)
+}
+for _, tc := range []struct{
+ch rune
+embolden int
+}{
+{'A', 128},
+{'M', 256},
+{'W', 384},
+{'Q', 512},
+} {
+pgmPath := filepath.Join(tmpDir, fmt.Sprintf("freetype-embolden-120px-%c-w%d.pgm", tc.ch, tc.embolden))
+img, err := decodePGM(pgmPath)
+if err != nil {
+panic(err)
+}
+pngPath := filepath.Join(outDir, fmt.Sprintf("freetype-embolden-120px-%c-w%d.png", tc.ch, tc.embolden))
+if err := writePNG(pngPath, img); err != nil {
+panic(err)
+}
 }
 pngPath := filepath.Join(outDir, fmt.Sprintf("freetype-embolden-%c-12px.png", ch))
 if err := writePNG(pngPath, img); err != nil {
@@ -466,6 +531,7 @@ EOGO
 ( cd "$REPO_ROOT" && go run "$TMP_DIR/convert_and_generate_demo.go" "$TMP_DIR" "$OUT_DIR" "$DEMO_PATH" "$MIXED_DEMO_PATH" "$FREETYPE_TEXT_EXPECTED_PATH" "$FREETYPE_TEXT_LARGE_EXPECTED_PATH" )
 
 echo "Generated: $OUT_DIR/freetype-embolden-{A..Z}-12px.png"
+echo "Generated: $OUT_DIR/freetype-embolden-120px-{A,M,W,Q}-w{128,256,384,512}.png"
 echo "Generated: $DEMO_PATH"
 echo "Generated: $MIXED_DEMO_PATH"
 echo "Generated: $FREETYPE_TEXT_EXPECTED_PATH"

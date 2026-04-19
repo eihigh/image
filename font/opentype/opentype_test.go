@@ -5,6 +5,7 @@
 package opentype
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -254,6 +255,73 @@ func TestFaceGlyphEmboldenFreeTypeTextExpected12px(t *testing.T) {
 	}
 	if mismatched > maxMismatchedPixels {
 		t.Fatalf("regular-vs-embolden text differs from FreeType expected: mismatched=%d, max=%d", mismatched, maxMismatchedPixels)
+	}
+}
+
+func TestFaceGlyphEmboldenFreeTypeExpectedLarge120px(t *testing.T) {
+	parsed, err := sfnt.Parse(goregular.TTF)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	const threshold = uint32(128 * 257)
+	testCases := []struct {
+		ch          rune
+		embolden    fixed.Int26_6
+		maxMismatch int
+	}{
+		{'A', 128, 2000},
+		{'M', 256, 3000},
+		{'W', 384, 4000},
+		{'Q', 512, 5000},
+	}
+	for _, tc := range testCases {
+		face, err := NewFace(parsed, &FaceOptions{
+			Size:     120,
+			DPI:      72,
+			Hinting:  font.HintingNone,
+			Embolden: tc.embolden,
+		})
+		if err != nil {
+			t.Fatalf("%c: NewFace: %v", tc.ch, err)
+		}
+		got := image.NewAlpha(image.Rect(0, 0, 280, 280))
+		d := font.Drawer{
+			Dst:  got,
+			Src:  image.NewUniform(color.Alpha{A: 255}),
+			Face: face,
+			Dot:  fixed.P(40, 220),
+		}
+		d.DrawString(string(tc.ch))
+		face.Close()
+
+		path := filepath.FromSlash(fmt.Sprintf("../testdata/freetype-embolden-120px-%c-w%d.png", tc.ch, tc.embolden))
+		fp, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("%c: Open expected image %q: %v", tc.ch, path, err)
+		}
+		wantImg, err := png.Decode(fp)
+		fp.Close()
+		if err != nil {
+			t.Fatalf("%c: Decode expected image: %v", tc.ch, err)
+		}
+		if got.Bounds() != wantImg.Bounds() {
+			t.Fatalf("%c: image bounds mismatch: got %v, want %v", tc.ch, got.Bounds(), wantImg.Bounds())
+		}
+
+		mismatched := 0
+		for y := got.Bounds().Min.Y; y < got.Bounds().Max.Y; y++ {
+			for x := got.Bounds().Min.X; x < got.Bounds().Max.X; x++ {
+				gr, _, _, _ := got.At(x, y).RGBA()
+				wr, _, _, _ := wantImg.At(x, y).RGBA()
+				if (gr >= threshold) != (wr >= threshold) {
+					mismatched++
+				}
+			}
+		}
+		if mismatched > tc.maxMismatch {
+			t.Fatalf("%c: embolden mask differs from large FreeType expected: mismatched=%d, max=%d", tc.ch, mismatched, tc.maxMismatch)
+		}
 	}
 }
 

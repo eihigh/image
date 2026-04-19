@@ -9,6 +9,10 @@ run:
 
 This command regenerates:
 	- font/testdata/freetype-embolden-A..Z-12px.png
+	- font/testdata/freetype-embolden-120px-A-w128.png
+	- font/testdata/freetype-embolden-120px-M-w256.png
+	- font/testdata/freetype-embolden-120px-W-w384.png
+	- font/testdata/freetype-embolden-120px-Q-w512.png
 	- font/testdata/freetype-regular-vs-embolden-text-12px.png
 	- font/testdata/freetype-regular-vs-embolden-text-24px.png
 	- testdata/font-embolden-demo.png
@@ -20,3 +24,4 @@ Generator conditions (for reproducibility):
 	- FreeType embolden settings: FT_Outline_EmboldenXY(..., 64, 64)
 	- Pixel size: 12
 	- Test comparison placement baseline: Dot=(20, 55)
+	- Additional large-glyph fixtures: size=120 with embolden widths {128,256,384,512} at Dot=(40, 220)
