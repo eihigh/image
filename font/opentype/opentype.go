@@ -15,6 +15,7 @@ import (
 	"image"
 	"image/draw"
 	"io"
+	"math"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/sfnt"
@@ -69,9 +70,10 @@ type Font = sfnt.Font
 // FaceOptions describes the possible options given to NewFace when
 // creating a new font.Face from a Font.
 type FaceOptions struct {
-	Size    float64      // Size is the font size in points
-	DPI     float64      // DPI is the dots per inch resolution
-	Hinting font.Hinting // Hinting selects how to quantize a vector font's glyph nodes
+	Size     float64      // Size is the font size in points
+	DPI      float64      // DPI is the dots per inch resolution
+	Hinting  font.Hinting // Hinting selects how to quantize a vector font's glyph nodes
+	Embolden fixed.Int26_6
 }
 
 func defaultFaceOptions() *FaceOptions {
@@ -86,9 +88,10 @@ func defaultFaceOptions() *FaceOptions {
 //
 // A Face is not safe to use concurrently.
 type Face struct {
-	f       *Font
-	hinting font.Hinting
-	scale   fixed.Int26_6
+	f        *Font
+	hinting  font.Hinting
+	scale    fixed.Int26_6
+	embolden fixed.Int26_6
 
 	metrics    font.Metrics
 	metricsSet bool
@@ -106,9 +109,10 @@ func NewFace(f *Font, opts *FaceOptions) (font.Face, error) {
 		opts = defaultFaceOptions()
 	}
 	face := &Face{
-		f:       f,
-		hinting: opts.Hinting,
-		scale:   fixed.Int26_6(0.5 + (opts.Size * opts.DPI * 64 / 72)),
+		f:        f,
+		hinting:  opts.Hinting,
+		scale:    fixed.Int26_6(0.5 + (opts.Size * opts.DPI * 64 / 72)),
+		embolden: opts.Embolden,
 	}
 	return face, nil
 }
@@ -161,6 +165,9 @@ func (f *Face) Glyph(dot fixed.Point26_6, r rune) (dr image.Rectangle, mask imag
 	segments, err := f.f.LoadGlyph(&f.buf, x, f.scale, nil)
 	if err != nil {
 		return image.Rectangle{}, nil, image.Point{}, 0, false
+	}
+	if f.embolden > 0 {
+		segments = emboldenSegments(segments, f.embolden)
 	}
 
 	// Numerical notation used below:
@@ -252,6 +259,247 @@ func (f *Face) Glyph(dot fixed.Point26_6, r rune) (dr image.Rectangle, mask imag
 	f.rast.Draw(&f.mask, f.mask.Bounds(), image.Opaque, image.Point{})
 
 	return dr, &f.mask, f.mask.Rect.Min, advance, x != 0
+}
+
+// emboldenSegments follows FreeType's FT_Outline_EmboldenXY at a high level,
+// but it is not a literal port.
+//
+// Mismatches vs FreeType are intentional and should be kept in mind for
+// follow-up work:
+//   - This code walks sfnt.Segments-derived point references, not FT_Outline's
+//     native {points, tags, contours} arrays, so the processed point stream is
+//     only an approximation of FreeType's point model.
+//   - Numeric behavior differs: this uses float64 + math.Hypot + math.Round,
+//     while FreeType uses fixed/integer-style FT_Pos/FT_Fixed arithmetic
+//     (FT_MulDiv, FT_Vector_Length), so edge-case rounding can diverge.
+//   - The contour walk is not FreeType's strict one-point-at-a-time loop.
+//     It skips zero-length outgoing edges and can apply one computed shift to
+//     a run of points (`for ; i != j; ...`). Ordinary contours are usually
+//     close, but degenerate contours (duplicate points / zero-length edges) may
+//     diverge.
+//   - There are extra early exits (for example minX == maxX || minY == maxY)
+//     that are not present in FT_Outline_EmboldenXY.
+//   - Time complexity remains O(n), but memory behavior differs because this
+//     implementation allocates pointRefs/contourEnds/points instead of mutating
+//     FreeType's outline arrays in-place.
+//
+// To move closer to a true FreeType port, operate on an FT_Outline-like
+// representation, use a strict one-point contour walk, remove or explicitly
+// justify extra early exits, and revisit the numeric model/rounding behavior.
+func emboldenSegments(src sfnt.Segments, embolden fixed.Int26_6) sfnt.Segments {
+	if embolden <= 0 || len(src) == 0 {
+		return src
+	}
+
+	dst := append(sfnt.Segments(nil), src...)
+	pointRefs, contourEnds := emboldenPointRefs(dst)
+	if len(pointRefs) == 0 || len(contourEnds) == 0 {
+		return dst
+	}
+
+	points := make([]emboldenPoint, len(pointRefs))
+	for i, ref := range pointRefs {
+		p := dst[ref.segIndex].Args[ref.argIndex]
+		// FreeType's outline logic assumes Y grows upwards.
+		points[i] = emboldenPoint{x: float64(p.X), y: -float64(p.Y)}
+	}
+	minX, minY := points[0].x, points[0].y
+	maxX, maxY := minX, minY
+	for _, v := range points[1:] {
+		minX = math.Min(minX, v.x)
+		minY = math.Min(minY, v.y)
+		maxX = math.Max(maxX, v.x)
+		maxY = math.Max(maxY, v.y)
+	}
+	if minX == maxX || minY == maxY {
+		return dst
+	}
+
+	orientation := emboldenOutlineOrientation(points, contourEnds)
+	if orientation == emboldenOrientationNone {
+		return dst
+	}
+
+	xStrength := float64(embolden) / 2
+	yStrength := float64(embolden) / 2
+	if xStrength == 0 && yStrength == 0 {
+		return dst
+	}
+
+	last := -1
+	for _, contourLast := range contourEnds {
+		first := last + 1
+		last = contourLast
+
+		var in, out, anchor emboldenPoint
+		var lIn, lOut, lAnchor float64
+		// Match FT_Outline_EmboldenXY's i/j/k cycling:
+		// i is the point being moved, j is the walk cursor, k is the anchor.
+		for i, j, k := last, first, -1; j != i && i != k; {
+			if j != k {
+				out.x = points[j].x - points[i].x
+				out.y = points[j].y - points[i].y
+				lOut = math.Hypot(out.x, out.y)
+				if lOut == 0 {
+					j = nextContourIndex(j, first, last)
+					continue
+				}
+				out.x /= lOut
+				out.y /= lOut
+			} else {
+				out = anchor
+				lOut = lAnchor
+			}
+
+			if lIn != 0 {
+				if k < 0 {
+					k = i
+					anchor = in
+					lAnchor = lIn
+				}
+
+				d := in.x*out.x + in.y*out.y
+				shift := emboldenPoint{}
+				// Shift only when the corner turn is not close to 180 degrees.
+				if d > emboldenCornerDotThreshold {
+					d += 1
+					shift.x = in.y + out.y
+					shift.y = in.x + out.x
+
+					if orientation == emboldenOrientationTrueType {
+						shift.x = -shift.x
+					} else {
+						shift.y = -shift.y
+					}
+
+					q := out.x*in.y - out.y*in.x // cross(out, in)
+					if orientation == emboldenOrientationTrueType {
+						q = -q
+					}
+					l := math.Min(lIn, lOut) // min adjacent edge length
+					// d is 1 + dot(in, out); same branch conditions as FreeType.
+					if q == 0 || xStrength*q <= l*d {
+						shift.x = shift.x * xStrength / d
+					} else {
+						shift.x = shift.x * l / q
+					}
+					if q == 0 || yStrength*q <= l*d {
+						shift.y = shift.y * yStrength / d
+					} else {
+						shift.y = shift.y * l / q
+					}
+				}
+
+				for ; i != j; i = nextContourIndex(i, first, last) {
+					points[i].x += xStrength + shift.x
+					points[i].y += yStrength + shift.y
+				}
+			} else {
+				i = j
+			}
+
+			in = out
+			lIn = lOut
+			j = nextContourIndex(j, first, last)
+		}
+	}
+
+	for i, ref := range pointRefs {
+		dst[ref.segIndex].Args[ref.argIndex].X = fixed.Int26_6(math.Round(points[i].x))
+		dst[ref.segIndex].Args[ref.argIndex].Y = fixed.Int26_6(-math.Round(points[i].y))
+	}
+
+	return dst
+}
+
+type emboldenPointRef struct {
+	segIndex int
+	argIndex int
+}
+
+type emboldenPoint struct {
+	x float64
+	y float64
+}
+
+const emboldenCornerDotThreshold = -0xF000 / 65536.0
+
+func nextContourIndex(index, first, last int) int {
+	if index < last {
+		return index + 1
+	}
+	return first
+}
+
+func emboldenPointRefs(segments sfnt.Segments) ([]emboldenPointRef, []int) {
+	refs := make([]emboldenPointRef, 0, len(segments))
+	contourEnds := []int{}
+	contourFirst := -1
+
+	for segIndex, seg := range segments {
+		if seg.Op == sfnt.SegmentOpMoveTo {
+			if contourFirst >= 0 && len(refs) > contourFirst {
+				contourEnds = append(contourEnds, len(refs)-1)
+			}
+			contourFirst = len(refs)
+			refs = append(refs, emboldenPointRef{segIndex: segIndex, argIndex: 0})
+			continue
+		}
+		if contourFirst < 0 {
+			return nil, nil
+		}
+
+		n := 1
+		switch seg.Op {
+		case sfnt.SegmentOpQuadTo:
+			n = 2
+		case sfnt.SegmentOpCubeTo:
+			n = 3
+		}
+		for argIndex := 0; argIndex < n; argIndex++ {
+			refs = append(refs, emboldenPointRef{segIndex: segIndex, argIndex: argIndex})
+		}
+	}
+
+	if contourFirst >= 0 && len(refs) > contourFirst {
+		contourEnds = append(contourEnds, len(refs)-1)
+	}
+	return refs, contourEnds
+}
+
+type emboldenOrientation int
+
+const (
+	emboldenOrientationNone emboldenOrientation = iota
+	emboldenOrientationTrueType
+	emboldenOrientationPostScript
+)
+
+func emboldenOutlineOrientation(points []emboldenPoint, contourEnds []int) emboldenOrientation {
+	if len(points) == 0 {
+		return emboldenOrientationNone
+	}
+
+	area := 0.0
+	last := -1
+	for _, contourLast := range contourEnds {
+		first := last + 1
+		last = contourLast
+		prev := points[last]
+		for i := first; i <= last; i++ {
+			cur := points[i]
+			area += (cur.y - prev.y) * (cur.x + prev.x)
+			prev = cur
+		}
+	}
+
+	if area > 0 {
+		return emboldenOrientationPostScript
+	}
+	if area < 0 {
+		return emboldenOrientationTrueType
+	}
+	return emboldenOrientationNone
 }
 
 // GlyphBounds satisfies the font.Face interface.
