@@ -287,7 +287,7 @@ func (f *Face) Glyph(dot fixed.Point26_6, r rune) (dr image.Rectangle, mask imag
 // pixel's alpha with the maximum alpha in a [x-emboldenPx, x] window.
 //
 // This approximates FT_GlyphSlot_Embolden behavior with a pure Go mask-space
-// operation, and uses a deque-based sliding-window maximum so each row is
+// operation, and uses a slice-backed sliding-window maximum so each row is
 // processed in O(width) time.
 func (f *Face) emboldenMask() {
 	w, h := f.mask.Rect.Dx(), f.mask.Rect.Dy()
@@ -315,8 +315,8 @@ func (f *Face) emboldenMask() {
 		head, tail := 0, 0
 		for x := 0; x < w; x++ {
 			// Keep indices in the inclusive [x-emboldenPx, x] window.
-			lowerInclusive := x - f.emboldenPx
-			for head < tail && idx[head] < lowerInclusive {
+			windowStart := x - f.emboldenPx
+			for head < tail && idx[head] < windowStart {
 				head++
 			}
 			alpha := row[x]
